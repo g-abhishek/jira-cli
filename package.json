@@ -1,0 +1,54 @@
+{
+  "name": "@g-abhishek/jira-cli",
+  "version": "1.0.0",
+  "description": "A production-ready Jira CLI tool for developers — built for the JCP project",
+  "main": "index.js",
+  "bin": {
+    "jira": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "commands/",
+    "services/",
+    "utils/",
+    "validators/",
+    "SETUP.md"
+  ],
+  "scripts": {
+    "start": "node index.js",
+    "prepublishOnly": "node -e \"require('./index.js')\" --help > /dev/null && echo '✔ Pre-publish check passed'"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/g-abhishek/jira-cli.git"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.20.0",
+    "axios": "^1.6.0",
+    "axios-retry": "^4.0.0",
+    "chalk": "^4.1.2",
+    "dotenv": "^16.3.1",
+    "inquirer": "^8.2.6",
+    "openai": "^4.28.0",
+    "ora": "^5.4.1",
+    "winston": "^3.11.0",
+    "yargs": "^17.7.2",
+    "zod": "^3.22.4"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "keywords": [
+    "jira",
+    "cli",
+    "atlassian",
+    "jcp",
+    "productivity"
+  ],
+  "author": "Abhishek Gupta <abhishek35.gupta@ril.com>",
+  "license": "MIT"
+}
