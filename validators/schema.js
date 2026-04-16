@@ -22,12 +22,12 @@ const EnvSchema = z.object({
 
 const IssueKeySchema = z
   .string()
-  .regex(/^[A-Z][A-Z0-9]+-\d+$/i, 'Invalid issue key format (expected e.g. JCP-1234)')
+  .regex(/^[A-Z][A-Z0-9]+-\d+$/i, 'Invalid issue key format (expected e.g. PROJ-1234)')
   .transform((v) => v.toUpperCase());
 
 const ProjectKeySchema = z
   .string()
-  .regex(/^[A-Z][A-Z0-9]+$/i, 'Invalid project key format (expected e.g. JCP)')
+  .regex(/^[A-Z][A-Z0-9]+$/i, 'Invalid project key format (expected e.g. PROJ)')
   .transform((v) => v.toUpperCase());
 
 // ─── Issue Creation ───────────────────────────────────────────────────────────
@@ -39,14 +39,7 @@ const CreateIssueSchema = z.object({
   projectKey: ProjectKeySchema,
   priority: z.string().optional(),
   labels: z.array(z.string()).optional().default([]),
-  // JCP-specific fields (all optional)
-  jcpWorkType: z.string().optional(),
-  jcpPlanningType: z.string().optional(),
-  jcpCluster: z.string().optional(),
-  jcpChannel: z.string().optional(),
-  jcpEstimate: z.string().optional(),
-  jcpPlannedMonth: z.string().optional(),
-  jcpPlannedQuarter: z.string().optional(),
+  // Custom dropdown fields are handled dynamically (keyed by Jira field ID, not validated here)
   storyPoints: z.number().int().min(0).max(100).optional(),
   epicLink: z.string().optional(),
   fixVersions: z.array(z.string()).optional().default([]),

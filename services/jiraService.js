@@ -8,7 +8,9 @@
  */
 
 const axios = require('axios');
-const axiosRetry = require('axios-retry');
+const _axiosRetryModule = require('axios-retry');
+// axios-retry v4 puts the callable function on .default; utilities stay on module root
+const axiosRetry = _axiosRetryModule.default || _axiosRetryModule;
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
@@ -59,9 +61,9 @@ function createClient() {
   // Retry on 429 (rate limit) and 5xx with exponential backoff
   axiosRetry(client, {
     retries: 3,
-    retryDelay: axiosRetry.exponentialDelay,
+    retryDelay: _axiosRetryModule.exponentialDelay,
     retryCondition: (err) =>
-      axiosRetry.isNetworkOrIdempotentRequestError(err) ||
+      _axiosRetryModule.isNetworkOrIdempotentRequestError(err) ||
       err.response?.status === 429 ||
       (err.response?.status >= 500 && err.response?.status < 600),
     onRetry: (count, err) => {
@@ -144,21 +146,20 @@ async function deleteIssue(key) {
  */
 async function searchIssues(jql, options = {}) {
   const client = createClient();
-  const res = await client.post('/search', {
+  // /search/jql (v3 replacement) uses nextPageToken for pagination, not startAt
+  const body = {
     jql,
-    startAt: options.startAt || 0,
     maxResults: options.maxResults || 25,
     fields: options.fields || [
       'summary', 'status', 'priority', 'assignee', 'issuetype',
-      'customfield_10026', // Story Points
-      'customfield_11371', // JCP Cluster
-      'customfield_17322', // JCP Work Type
-      'customfield_10014', // Epic Link
-      'customfield_10020', // Sprint
+      'customfield_10026', // Story Points (universal)
+      'customfield_10014', // Epic Link (universal)
+      'customfield_10020', // Sprint (universal)
       'duedate', 'updated', 'labels', 'components', 'fixVersions',
-      'customfield_10091', // Assigned Developer
     ],
-  });
+  };
+  if (options.nextPageToken) body.nextPageToken = options.nextPageToken;
+  const res = await client.post('/search/jql', body);
   return res.data;
 }
 

@@ -22,7 +22,7 @@ const { getIssue, getTransitions, transitionIssue, updateIssue } = require('../s
 const { printError } = require('../utils/errorParser');
 const { validate, IssueKeySchema } = require('../validators/schema');
 const cache = require('../utils/cache');
-const { requireSyncedField } = require('../utils/requireSync');
+// requireSyncedField no longer needed — custom fields are now loaded directly from cache
 const logger = require('../utils/logger');
 
 module.exports = {
@@ -104,42 +104,59 @@ module.exports = {
       if (argv.fields) {
         const projectKey = f.project?.key;
         const synced = projectKey ? cache.get(`${projectKey}:fields`) : null;
-        // Clusters required from sync — if missing, skip that prompt
-        const clusters = synced ? requireSyncedField(synced, 'clusters', projectKey, 'JCP Cluster') : null;
+        const customFields   = synced?.customFields   || {};  // fieldLabel → [values]
+        const customFieldIds = synced?.customFieldIds || {};  // fieldLabel → fieldId
+        const priorities     = synced?.priorities || ['Blocker', 'High', 'Medium', 'Low', 'Minor'];
 
-        const fieldAnswers = await inquirer.prompt([
+        // Core field prompts
+        const corePrompts = [
           {
             type: 'list',
-            name: 'priority',
+            name: '_priority',
             message: 'Update priority? (current: ' + (f.priority?.name || 'none') + ')',
-            choices: ['(keep)', 'Blocker', 'High', 'Medium', 'Low', 'Minor'],
+            choices: ['(keep)', ...priorities],
           },
           {
             type: 'number',
-            name: 'storyPoints',
+            name: '_storyPoints',
             message: `Update story points? (current: ${f.customfield_10026 || 0}, 0 = keep):`,
             default: 0,
           },
-          {
-            type: 'list',
-            name: 'jcpCluster',
-            message: 'Update JCP Cluster?',
-            choices: clusters ? ['(keep)', ...clusters] : ['(keep)'],
-            when: () => !!clusters,
-          },
-          {
-            type: 'input',
-            name: 'comment',
-            message: 'Add a comment with this transition? (blank to skip):',
-          },
-        ]);
+        ];
 
-        if (fieldAnswers.priority !== '(keep)') fieldUpdates.priority = { name: fieldAnswers.priority };
-        if (fieldAnswers.storyPoints > 0) fieldUpdates.customfield_10026 = fieldAnswers.storyPoints;
-        if (fieldAnswers.jcpCluster !== '(keep)') fieldUpdates.customfield_11371 = { value: fieldAnswers.jcpCluster };
+        // Append one prompt per synced custom dropdown field
+        const customPrompts = Object.entries(customFields).map(([label, values]) => ({
+          type: 'list',
+          name: `_cf_${label}`,
+          message: `Update ${label}?`,
+          choices: ['(keep)', ...values],
+          pageSize: 12,
+        }));
+
+        // Comment always last
+        const commentPrompt = [{
+          type: 'input',
+          name: '_comment',
+          message: 'Add a comment with this transition? (blank to skip):',
+        }];
+
+        const fieldAnswers = await inquirer.prompt([...corePrompts, ...customPrompts, ...commentPrompt]);
+
+        if (fieldAnswers._priority !== '(keep)') fieldUpdates.priority = { name: fieldAnswers._priority };
+        if (fieldAnswers._storyPoints > 0) fieldUpdates.customfield_10026 = fieldAnswers._storyPoints;
+
+        // Apply any custom field updates using their real Jira field IDs
+        Object.entries(fieldAnswers).forEach(([key, value]) => {
+          if (key.startsWith('_cf_') && value !== '(keep)') {
+            const label = key.slice(4); // strip '_cf_'
+            if (customFieldIds[label]) {
+              fieldUpdates[customFieldIds[label]] = { value };
+            }
+          }
+        });
 
         // Store comment to add after transition
-        if (fieldAnswers.comment) fieldUpdates._comment = fieldAnswers.comment;
+        if (fieldAnswers._comment) fieldUpdates._comment = fieldAnswers._comment;
       }
 
       // ── Confirm ────────────────────────────────────────────────────────────

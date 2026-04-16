@@ -5,18 +5,18 @@
  * index.js — Jira CLI Entry Point
  *
  * A production-ready Jira CLI tool for developers.
- * Built for the JCP (Jio Commerce Platform) project on Atlassian.
+ * Works with any Jira Cloud workspace.
  *
  * Usage:
  *   jira list                        List your tickets
  *   jira list --filter "bugs today"  AI-powered filter
  *   jira create                      Create a ticket interactively
  *   jira create --from-git           Generate from git history
- *   jira update JCP-1234             Transition a ticket
- *   jira delete JCP-1234             Delete a ticket
- *   jira view JCP-1234               View ticket details
- *   jira comment JCP-1234            Add a comment
- *   jira start JCP-1234              Transition + git branch
+ *   jira update PROJ-1234            Transition a ticket
+ *   jira delete PROJ-1234            Delete a ticket
+ *   jira view PROJ-1234              View ticket details
+ *   jira comment PROJ-1234           Add a comment
+ *   jira start PROJ-1234             Transition + git branch
  *   jira search --filter "..."       Search all org tickets
  *   jira dashboard                   Terminal sprint board
  *   jira sync                        Sync project metadata
@@ -91,9 +91,9 @@ yargs
   .example('$0 list --filter "bugs this week"', 'AI-powered filter')
   .example('$0 create', 'Create a ticket interactively')
   .example('$0 create --from-git', 'Generate ticket from git history')
-  .example('$0 update JCP-1234', 'Transition a ticket')
-  .example('$0 view JCP-1234 --summarize', 'View ticket with AI TL;DR')
-  .example('$0 start JCP-1234', 'Transition + create git branch')
+  .example('$0 update PROJ-1234', 'Transition a ticket')
+  .example('$0 view PROJ-1234 --summarize', 'View ticket with AI TL;DR')
+  .example('$0 start PROJ-1234', 'Transition + create git branch')
   .example('$0 dashboard', 'Open sprint board')
   .example('$0 sync', 'Sync project metadata')
   .example('$0 doctor', 'Check setup health')

@@ -7,10 +7,11 @@
  * Flow:
  *  1. Select issue type
  *  2. Input summary + description
- *  3. Select JCP-specific fields (cluster, work type, etc.)
- *  4. Select priority, fix version, component, story points
- *  5. AI enhances summary + description
- *  6. Confirm → create → print key
+ *  3. Select core fields (priority, story points, due date)
+ *  4. Select custom dropdown fields (dynamically built from `jira sync` cache)
+ *  5. Select fix versions + components
+ *  6. AI enhances summary + description
+ *  7. Confirm → create → print key
  *
  * Flags:
  *   --from-git   Generate ticket from recent git commits (AI)
@@ -48,17 +49,18 @@ module.exports = {
       const synced = cache.get(`${projectKey}:fields`);
       requireSyncedData(synced, projectKey);
 
-      const fixVersions  = requireSyncedField(synced, 'fixVersions',  projectKey, 'Fix Versions');
-      const components   = requireSyncedField(synced, 'components',   projectKey, 'Components');
-      const issueTypes   = requireSyncedField(synced, 'issueTypes',   projectKey, 'Issue Types');
-      const clusters     = requireSyncedField(synced, 'clusters',     projectKey, 'JCP Cluster');
-      const channels     = requireSyncedField(synced, 'channels',     projectKey, 'JCP Channel');
-      const workTypes    = requireSyncedField(synced, 'workTypes',    projectKey, 'JCP Work Type');
-      const planningTypes = requireSyncedField(synced, 'planningTypes', projectKey, 'JCP Planning Type');
-      const estimates    = requireSyncedField(synced, 'estimates',    projectKey, 'JCP Estimate');
-      // Months and quarters are calendar constants — not project-specific
-      const months   = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-      const quarters = ['JFM', 'AMJ', 'JAS', 'OND'];
+      // These core fields must always be synced
+      const issueTypes = requireSyncedField(synced, 'issueTypes', projectKey, 'Issue Types');
+
+      // Optional fields — silently skip if not present in this project
+      const fixVersions   = synced.fixVersions  || [];
+      const components    = synced.components   || [];
+      const priorities    = synced.priorities   || ['Blocker', 'High', 'Medium', 'Low', 'Minor'];
+
+      // Custom dropdown fields discovered dynamically during `jira sync`
+      // Works for any Jira project — no hardcoded field IDs
+      const customFields    = synced.customFields    || {};  // { fieldLabel: [values] }
+      const customFieldIds  = synced.customFieldIds  || {};  // { fieldLabel: "customfield_XXXXX" }
 
       console.log(chalk.bold(`\n✨ Create a new ticket in ${chalk.cyan(projectKey)}\n`));
 
@@ -151,8 +153,8 @@ module.exports = {
           type: 'list',
           name: 'priority',
           message: 'Priority:',
-          choices: ['Blocker', 'High', 'Medium', 'Low', 'Minor'],
-          default: 'Medium',
+          choices: priorities,
+          default: priorities.includes('Medium') ? 'Medium' : priorities[0],
         },
         {
           type: 'number',
@@ -169,51 +171,29 @@ module.exports = {
         },
       ]);
 
-      // ── Step 5: JCP Fields ───────────────────────────────────────────────────
-      const jcpAnswers = await inquirer.prompt([
-        {
+      // ── Step 5: Custom Fields (dynamic — built from jira sync) ───────────────
+      // Shows whatever dropdown fields exist in this specific project. Works for
+      // any Jira workspace — no hardcoded field IDs.
+      const customFieldAnswers = {};  // fieldId → { value: "..." }
+
+      if (Object.keys(customFields).length > 0) {
+        const customPrompts = Object.entries(customFields).map(([label, values]) => ({
           type: 'list',
-          name: 'jcpWorkType',
-          message: 'JCP Work Type:',
-          choices: ['(skip)', ...workTypes],
-        },
-        {
-          type: 'list',
-          name: 'jcpPlanningType',
-          message: 'JCP Planning Type:',
-          choices: ['(skip)', ...planningTypes],
-        },
-        {
-          type: 'list',
-          name: 'jcpCluster',
-          message: 'JCP Cluster:',
-          choices: ['(skip)', ...clusters],
-        },
-        {
-          type: 'list',
-          name: 'jcpChannel',
-          message: 'JCP Channel:',
-          choices: ['(skip)', ...channels],
-        },
-        {
-          type: 'list',
-          name: 'jcpEstimate',
-          message: 'JCP Estimate:',
-          choices: ['(skip)', ...estimates],
-        },
-        {
-          type: 'list',
-          name: 'jcpPlannedMonth',
-          message: 'JCP Planned Month:',
-          choices: ['(skip)', ...months],
-        },
-        {
-          type: 'list',
-          name: 'jcpPlannedQuarter',
-          message: 'JCP Planned Quarter:',
-          choices: ['(skip)', ...quarters],
-        },
-      ]);
+          name: label,
+          message: `${label}:`,
+          choices: ['(skip)', ...values],
+          pageSize: 12,
+        }));
+
+        const rawCustomAnswers = await inquirer.prompt(customPrompts);
+
+        // Map label answers back to their Jira field IDs for payload
+        Object.entries(rawCustomAnswers).forEach(([label, value]) => {
+          if (value !== '(skip)' && customFieldIds[label]) {
+            customFieldAnswers[customFieldIds[label]] = { value };
+          }
+        });
+      }
 
       // ── Step 6: Versions + Components ────────────────────────────────────────
       let selectedVersions = [];
@@ -262,8 +242,12 @@ module.exports = {
       console.log(`  ${chalk.dim('Type')}     ${issueType}`);
       console.log(`  ${chalk.dim('Summary')}  ${enhanced.summary.slice(0, 80)}`);
       console.log(`  ${chalk.dim('Priority')} ${coreAnswers.priority}`);
-      if (jcpAnswers.jcpCluster !== '(skip)') console.log(`  ${chalk.dim('Cluster')}  ${jcpAnswers.jcpCluster}`);
-      if (jcpAnswers.jcpWorkType !== '(skip)') console.log(`  ${chalk.dim('Work Type')} ${jcpAnswers.jcpWorkType}`);
+      // Show any custom fields that were set
+      Object.entries(customFieldAnswers).forEach(([fieldId, val]) => {
+        // Look up the label for display
+        const label = Object.keys(customFieldIds).find((l) => customFieldIds[l] === fieldId) || fieldId;
+        console.log(`  ${chalk.dim(label.slice(0, 10).padEnd(10))} ${val.value}`);
+      });
       console.log(chalk.bold('─────────────────────────────────────────────────\n'));
 
       const { confirmed } = await inquirer.prompt([
@@ -291,13 +275,8 @@ module.exports = {
 
       if (coreAnswers.storyPoints > 0) fields.customfield_10026 = coreAnswers.storyPoints;
       if (coreAnswers.dueDate) fields.duedate = coreAnswers.dueDate;
-      if (jcpAnswers.jcpWorkType !== '(skip)') fields.customfield_17322 = { value: jcpAnswers.jcpWorkType };
-      if (jcpAnswers.jcpPlanningType !== '(skip)') fields.customfield_17321 = { value: jcpAnswers.jcpPlanningType };
-      if (jcpAnswers.jcpCluster !== '(skip)') fields.customfield_11371 = { value: jcpAnswers.jcpCluster };
-      if (jcpAnswers.jcpChannel !== '(skip)') fields.customfield_10455 = { value: jcpAnswers.jcpChannel };
-      if (jcpAnswers.jcpEstimate !== '(skip)') fields.customfield_17356 = { value: jcpAnswers.jcpEstimate };
-      if (jcpAnswers.jcpPlannedMonth !== '(skip)') fields.customfield_17389 = { value: jcpAnswers.jcpPlannedMonth };
-      if (jcpAnswers.jcpPlannedQuarter !== '(skip)') fields.customfield_17390 = { value: jcpAnswers.jcpPlannedQuarter };
+      // Dynamic custom fields from sync — field IDs are project-specific
+      Object.assign(fields, customFieldAnswers);
       if (selectedVersions.length > 0) fields.fixVersions = selectedVersions.map((v) => ({ name: v }));
       if (selectedComponents.length > 0) fields.components = selectedComponents.map((c) => ({ name: c }));
 

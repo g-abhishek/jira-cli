@@ -79,7 +79,7 @@ module.exports = {
 
         if (providers.length === 0) {
           console.log(`  ${chalk.dim('AI Provider')}     ${chalk.dim('None detected')}`);
-          console.log(chalk.dim('  Install Ollama locally or set OPENAI_API_KEY / ANTHROPIC_API_KEY\n'));
+          console.log(chalk.dim('  Set ANTHROPIC_API_KEY or OPENAI_API_KEY to enable AI features.\n'));
         } else {
           const preferred = config.AI_PROVIDER;
           providers.forEach((p, i) => {
@@ -97,7 +97,7 @@ module.exports = {
       if (argv.action === 'set') {
         if (!argv.key || !argv.value) {
           console.log(chalk.red('  Usage: jira config set <KEY> <VALUE>'));
-          console.log(chalk.dim('  Keys: JIRA_BASE_URL | JIRA_EMAIL | JIRA_API_TOKEN | OPENAI_API_KEY | DEFAULT_PROJECT'));
+          console.log(chalk.dim('  Keys: JIRA_BASE_URL | JIRA_EMAIL | JIRA_API_TOKEN | ANTHROPIC_API_KEY | OPENAI_API_KEY | AI_PROVIDER | DEFAULT_PROJECT'));
           process.exit(1);
         }
         const config = readConfig();
@@ -131,11 +131,14 @@ module.exports = {
       console.log(chalk.dim('  Credentials are stored in: ' + CONFIG_PATH));
       console.log(chalk.dim('  File is readable only by you (chmod 600)\n'));
 
+      console.log(chalk.dim('  ─────────────────────────────────────────────'));
+      console.log(chalk.dim('  Step 1 of 2 — Jira credentials\n'));
+
       const answers = await inquirer.prompt([
         {
           type: 'input',
           name: 'JIRA_BASE_URL',
-          message: 'Jira base URL:',
+          message: `Jira base URL ${chalk.dim('(e.g. https://yourcompany.atlassian.net)')}:`,
           default: existing.JIRA_BASE_URL || '',
           validate: (v) => {
             try { new URL(v); return true; } catch { return 'Must be a valid URL (e.g. https://yourcompany.atlassian.net)'; }
@@ -145,7 +148,7 @@ module.exports = {
         {
           type: 'input',
           name: 'JIRA_EMAIL',
-          message: 'Your Atlassian email:',
+          message: `Atlassian account email ${chalk.dim('(e.g. you@yourcompany.com)')}:`,
           default: existing.JIRA_EMAIL || '',
           validate: (v) => v.includes('@') || 'Must be a valid email',
           filter: (v) => v.trim().toLowerCase(),
@@ -153,7 +156,8 @@ module.exports = {
         {
           type: 'password',
           name: 'JIRA_API_TOKEN',
-          message: 'Jira API Token (hidden):',
+          message: `Jira API Token ${chalk.dim('(get it at id.atlassian.com → Security → API tokens)')}:`,
+          suffix: chalk.dim('\n  ↳ Paste your token — input is hidden\n '),
           mask: '•',
           default: existing.JIRA_API_TOKEN || '',
           validate: (v) => v.trim().length > 5 || 'API token appears too short',
@@ -162,14 +166,18 @@ module.exports = {
         {
           type: 'input',
           name: 'DEFAULT_PROJECT',
-          message: 'Default project key:',
-          default: existing.DEFAULT_PROJECT || 'JCP',
+          message: `Default project key ${chalk.dim('(e.g. MYPROJ — the prefix before ticket numbers)')}:`,
+          default: existing.DEFAULT_PROJECT || '',
           filter: (v) => v.trim().toUpperCase(),
         },
       ]);
 
       // ── AI Provider Setup ──────────────────────────────────────────────────
-      console.log(chalk.bold('\n  AI Setup (powers ticket enhancement, JQL filter, TL;DR)\n'));
+      console.log(chalk.dim('\n  ─────────────────────────────────────────────'));
+      console.log(chalk.bold('  Step 2 of 2 — AI setup') + chalk.dim(' (optional — skip to disable AI features)\n'));
+      console.log(chalk.dim('  AI enables: plain-English ticket filters, auto-enhance descriptions, TL;DR summaries'));
+      console.log(chalk.dim('  Get a Claude key → console.anthropic.com'));
+      console.log(chalk.dim('  Get an OpenAI key → platform.openai.com/api-keys\n'));
 
       // Show what's already detected
       const detectedProviders = detectProviders();
@@ -183,17 +191,18 @@ module.exports = {
           name: 'AI_PROVIDER',
           message: 'AI provider:',
           choices: [
-            { name: 'Auto-detect (Claude if available, else OpenAI)', value: 'auto' },
-            { name: 'Anthropic Claude', value: 'claude' },
-            { name: 'OpenAI (Codex)', value: 'openai' },
-            { name: 'None (disable AI features)', value: 'none' },
+            { name: 'Auto-detect  (Claude first, falls back to OpenAI)', value: 'auto' },
+            { name: 'Anthropic Claude  (recommended)', value: 'claude' },
+            { name: 'OpenAI (Codex / GPT)', value: 'openai' },
+            { name: 'None — skip AI features', value: 'none' },
           ],
           default: existing.AI_PROVIDER || 'auto',
         },
         {
           type: 'password',
           name: 'ANTHROPIC_API_KEY',
-          message: 'Anthropic API Key:',
+          message: `Anthropic API Key ${chalk.dim('(starts with sk-ant-...)')}:`,
+          suffix: chalk.dim('\n  ↳ Leave blank to keep existing key\n '),
           mask: '•',
           when: (a) => a.AI_PROVIDER === 'claude' || a.AI_PROVIDER === 'auto',
           filter: (v) => v.trim() || existing.ANTHROPIC_API_KEY || '',
@@ -201,7 +210,8 @@ module.exports = {
         {
           type: 'password',
           name: 'OPENAI_API_KEY',
-          message: 'OpenAI API Key:',
+          message: `OpenAI API Key ${chalk.dim('(starts with sk-...)')}:`,
+          suffix: chalk.dim('\n  ↳ Leave blank to keep existing key\n '),
           mask: '•',
           when: (a) => a.AI_PROVIDER === 'openai' || a.AI_PROVIDER === 'auto',
           filter: (v) => v.trim() || existing.OPENAI_API_KEY || '',

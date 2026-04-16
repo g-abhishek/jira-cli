@@ -87,27 +87,36 @@ module.exports = {
       row('Components', f.components?.map((c) => c.name).join(', ') || null);
       row('Fix Versions', f.fixVersions?.map((v) => v.name).join(', ') || null);
 
-      // ── JCP-Specific Fields ───────────────────────────────────────────────────
-      const jcpFields = [
-        ['JCP Work Type', f.customfield_17322?.value],
-        ['JCP Planning Type', f.customfield_17321?.value],
-        ['JCP Delivery State', f.customfield_17320?.value],
-        ['JCP Cluster', f.customfield_11371?.value],
-        ['JCP Channel', f.customfield_10455?.value],
-        ['JCP Estimate', f.customfield_17356?.value],
-        ['JCP Planned Month', f.customfield_17389?.value],
-        ['JCP Planned Quarter', f.customfield_17390?.value],
-        ['Environment', f.customfield_10030?.value],
-        ['Severity', f.customfield_10033?.value],
-        ['Ticket Category', f.customfield_10441?.value],
-        ['SIT Due Date', f.customfield_12790],
-        ['QA Due Date', f.customfield_10417],
-      ];
+      // ── Custom Fields (dynamic — from sync cache, works for any project) ────────
+      const os = require('os');
+      const path = require('path');
+      const fs = require('fs');
+      const _cfg = (() => {
+        try { return JSON.parse(fs.readFileSync(path.join(os.homedir(), '.jira-cli', 'cache.json'), 'utf8')); }
+        catch { return {}; }
+      })();
+      const _synced = _cfg[`${issue.fields?.project?.key}:fields`]?.value;
+      const _cfIds = _synced?.customFieldIds || {}; // { "Field Label": "customfield_XXXXX" }
 
-      const hasJcp = jcpFields.some(([, v]) => v);
-      if (hasJcp) {
-        console.log('\n' + chalk.bold.dim('  ── JCP Fields ──────────────────────────'));
-        jcpFields.forEach(([label, value]) => row(label, value));
+      // Build a reverse map: customfield_XXXXX → "Field Label"
+      const fieldIdToLabel = Object.fromEntries(
+        Object.entries(_cfIds).map(([label, id]) => [id, label])
+      );
+
+      // Collect any custom field with a value from the issue response
+      const customFieldRows = Object.entries(f)
+        .filter(([key, val]) => key.startsWith('customfield_') && val !== null && val !== undefined)
+        .map(([key, val]) => {
+          const label = fieldIdToLabel[key] || null;
+          if (!label) return null; // skip unknown fields not in sync
+          const display = typeof val === 'object' ? (val.value || val.name || val.displayName || JSON.stringify(val)) : String(val);
+          return [label, display];
+        })
+        .filter(Boolean);
+
+      if (customFieldRows.length > 0) {
+        console.log('\n' + chalk.bold.dim('  ── Custom Fields ────────────────────────'));
+        customFieldRows.forEach(([label, value]) => row(label, value));
       }
 
       // ── Description ──────────────────────────────────────────────────────────

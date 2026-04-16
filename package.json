@@ -1,7 +1,7 @@
 {
   "name": "@g-abhishek/jira-cli",
-  "version": "1.0.0",
-  "description": "A production-ready Jira CLI tool for developers — built for the JCP project",
+  "version": "1.1.1",
+  "description": "A production-ready Jira CLI for developers — list, create, update, and search issues from the terminal",
   "main": "index.js",
   "bin": {
     "jira": "./index.js"
@@ -12,6 +12,7 @@
     "services/",
     "utils/",
     "validators/",
+    "README.md",
     "SETUP.md"
   ],
   "scripts": {
@@ -19,8 +20,8 @@
     "prepublishOnly": "node -e \"require('./index.js')\" --help > /dev/null && echo '✔ Pre-publish check passed'"
   },
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com",
-    "access": "restricted"
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
   },
   "repository": {
     "type": "git",
@@ -46,9 +47,10 @@
     "jira",
     "cli",
     "atlassian",
-    "jcp",
-    "productivity"
+    "productivity",
+    "devtools",
+    "terminal"
   ],
-  "author": "Abhishek Gupta <abhishek35.gupta@ril.com>",
+  "author": "Abhishek Gupta (https://github.com/g-abhishek)",
   "license": "MIT"
 }

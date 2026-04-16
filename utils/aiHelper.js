@@ -127,17 +127,82 @@ Rules:
   }
 }
 
+// ── Smart Fallback JQL Parser ─────────────────────────────────────────────────
+
+/**
+ * Parse common natural-language patterns into JQL without AI.
+ * Handles: date ranges, assignee, status, issue type, priority.
+ */
+function buildFallbackJQL(naturalQuery, projectKey) {
+  const q = naturalQuery.toLowerCase();
+  const conditions = [`project = ${projectKey}`];
+
+  // ── Date ranges ─────────────────────────────────────────────────────────────
+  const lastNMonths = q.match(/last\s+(\d+)\s+months?/);
+  const lastNWeeks  = q.match(/last\s+(\d+)\s+weeks?/);
+  const lastNDays   = q.match(/last\s+(\d+)\s+days?/);
+  const thisWeek    = /this\s+week/.test(q);
+  const thisMonth   = /this\s+month/.test(q);
+  const today       = /\btoday\b/.test(q);
+
+  if (lastNMonths) {
+    const n = parseInt(lastNMonths[1], 10);
+    conditions.push(`updated >= -${n * 30}d`);
+  } else if (lastNWeeks) {
+    const n = parseInt(lastNWeeks[1], 10);
+    conditions.push(`updated >= -${n * 7}d`);
+  } else if (lastNDays) {
+    const n = parseInt(lastNDays[1], 10);
+    conditions.push(`updated >= -${n}d`);
+  } else if (thisWeek) {
+    conditions.push('updated >= startOfWeek()');
+  } else if (thisMonth) {
+    conditions.push('updated >= startOfMonth()');
+  } else if (today) {
+    conditions.push('updated >= startOfDay()');
+  }
+
+  // ── Assignee ────────────────────────────────────────────────────────────────
+  if (/\bmine\b|\bmy\b|\bassigned to me\b/.test(q)) {
+    conditions.push('assignee = currentUser()');
+  }
+
+  // ── Status ──────────────────────────────────────────────────────────────────
+  if (/\bin progress\b/.test(q))   conditions.push('status = "In Progress"');
+  else if (/\bopen\b/.test(q))     conditions.push('status = "Open"');
+  else if (/\bdone\b|\bclosed\b|\bcompleted\b/.test(q)) conditions.push('status = Done');
+  else if (/\bto do\b|\btodo\b/.test(q)) conditions.push('status = "To Do"');
+  else if (/\bin review\b/.test(q)) conditions.push('status = "In Review"');
+
+  // ── Issue type ───────────────────────────────────────────────────────────────
+  if (/\bbug[s]?\b/.test(q))       conditions.push('issuetype = Bug');
+  else if (/\bstory|stories\b/.test(q)) conditions.push('issuetype = Story');
+  else if (/\btask[s]?\b/.test(q)) conditions.push('issuetype = Task');
+  else if (/\bepic[s]?\b/.test(q)) conditions.push('issuetype = Epic');
+
+  // ── Priority ─────────────────────────────────────────────────────────────────
+  if (/\bhigh priority\b|\burgent\b|\bblocker\b/.test(q)) {
+    conditions.push('priority in (High, Highest, Blocker)');
+  } else if (/\blow priority\b/.test(q)) {
+    conditions.push('priority in (Low, Lowest)');
+  }
+
+  return conditions.join(' AND ') + ' ORDER BY updated DESC';
+}
+
 // ── 2. Convert Plain English to JQL ──────────────────────────────────────────
 
 async function convertToJQL(naturalQuery, projectKey) {
+  // Build smart fallback first (better than raw text search)
+  const smartJQL = buildFallbackJQL(naturalQuery, projectKey);
   const fallback = {
-    jql: `project = ${projectKey} AND text ~ "${naturalQuery}" ORDER BY updated DESC`,
+    jql: smartJQL,
     aiUsed: false,
     provider: null,
   };
 
   const provider = await getProvider();
-  if (!provider) return fallback;
+  if (!provider) return { ...fallback, reason: 'no_provider' };
 
   const today = new Date().toISOString().split('T')[0];
 
@@ -165,7 +230,7 @@ Rules:
     return { jql: jql.trim(), aiUsed: true, provider: provider.name };
   } catch (err) {
     logger.warn(`JQL conversion failed (${provider.name}): ${err.message} — using fallback`);
-    return fallback;
+    return { ...fallback, reason: 'api_error', errorMsg: err.message };
   }
 }
 

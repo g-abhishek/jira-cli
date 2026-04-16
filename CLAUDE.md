@@ -8,11 +8,9 @@ Any AI agent (Claude, Copilot, etc.) working on this project must follow these r
 ## Project Overview
 
 This is a **Node.js CommonJS CLI tool** named `jira` that interacts with the **Atlassian Jira REST API v3**.
-It is designed for personal developer use, scoped to the **JCP (Jio Commerce Platform)** Atlassian workspace.
+It is designed for personal developer use and works with **any Jira Cloud workspace**.
 
-**Primary user**: Abhishek Gupta (`abhishek35.gupta@ril.com`)
-**Jira workspace**: `gofynd.atlassian.net`
-**Default project**: `JCP`
+Published to npm as `@g-abhishek/jira-cli` — installable globally via `npm install -g @g-abhishek/jira-cli`.
 
 ---
 
@@ -82,89 +80,72 @@ jira-cli/
 
 ---
 
-## JCP Project — Known Custom Fields
+## Custom Fields — Dynamic Discovery (No Hardcoding)
 
-These are the Jira custom field IDs for the JCP project. Use these exact IDs when reading/writing fields:
+Custom dropdown fields (option fields) are **fully dynamic**. The CLI works with any Jira project's custom fields without any hardcoded field IDs.
 
-| Field Name | Custom Field ID | Type |
-|---|---|---|
-| Story Points | `customfield_10026` | number |
-| QA Story Points | `customfield_10075` | number |
-| Total Story Points | `customfield_10096` | number |
-| JCP Work Type | `customfield_17322` | option |
-| JCP Planning Type | `customfield_17321` | option |
-| JCP Delivery State | `customfield_17320` | option |
-| JCP Cluster | `customfield_11371` | option |
-| JCP Channel | `customfield_10455` | option |
-| JCP Estimate | `customfield_17356` | option |
-| JCP Planned Month | `customfield_17389` | option |
-| JCP Planned Quarter | `customfield_17390` | option |
-| Sprint | `customfield_10020` | array |
-| Epic Link | `customfield_10014` | string |
-| Assigned Developer | `customfield_10091` | user |
-| Assigned QA | `customfield_10054` | user |
-| Engineering Lead | `customfield_10055` | user |
-| Product Manager | `customfield_10261` | user |
-| Environment (dropdown) | `customfield_10030` | option |
-| Severity | `customfield_10033` | option |
-| Ticket Category | `customfield_10441` | option |
-| Requesting Team | `customfield_10381` | option |
-| SIT Due Date | `customfield_12790` | date |
-| QA Due Date | `customfield_10417` | date |
-| QA Start Date | `customfield_10416` | date |
-| Affected Systems | `customfield_10056` | array |
-| ADO Link | `customfield_10361` | string |
-| BUG Description | `customfield_10272` | doc |
-| STORY Description | `customfield_10273` | doc |
-| EPIC Description | `customfield_10275` | doc |
+### How it works
 
-**When writing to option fields**, always use `{ value: "option name" }` format.
-**When writing to user fields**, always use `{ accountId: "..." }` format.
-**When writing to array fields**, always use `[{ name: "..." }]` format.
+`jira sync` calls the Jira `createMeta` API and discovers **all** custom fields that have `allowedValues`. It stores two objects in the cache:
+
+| Cache Key | Content |
+|---|---|
+| `customFields` | `{ "Field Label": ["option1", "option2", ...], ... }` |
+| `customFieldIds` | `{ "Field Label": "customfield_XXXXX", ... }` |
+
+`jira create` and `jira update --fields` read these objects and generate prompts dynamically — one prompt per discovered custom field.
+
+### Writing to custom fields in payloads
+
+Always use:
+- **Option fields**: `{ value: "option name" }`
+- **User fields**: `{ accountId: "..." }`
+- **Array fields**: `[{ name: "..." }]`
+- **Number fields**: raw number (e.g. story points `customfield_10026`)
+
+### The only hardcoded field
+
+Story Points (`customfield_10026`) is the one universal field hardcoded because it is standard across all Jira instances.
 
 ---
 
-## JCP Dropdown Values — Sync Required
+## Sync Cache — What Gets Stored
 
-**All dropdown field values MUST come from the sync cache. No hardcoded fallbacks.**
+Cache lives in `~/.jira-cli/cache.json`. Default TTL: 24 hours.
+Cache keys follow the pattern: `{PROJECT_KEY}:{data_type}`
+
+| Cache key | Populated by | Used by |
+|---|---|---|
+| `{KEY}:fields` → `issueTypes` | project info API | `create` |
+| `{KEY}:fields` → `fixVersions` | project versions API | `create` |
+| `{KEY}:fields` → `components` | project components API | `create` |
+| `{KEY}:fields` → `priorities` | priorities API | `create`, `update` |
+| `{KEY}:fields` → `customFields` | createMeta API — all custom option fields | `create`, `update --fields` |
+| `{KEY}:fields` → `customFieldIds` | createMeta API — maps label → fieldId | `create`, `update --fields` |
+| `{KEY}:fields` → `statuses` | createMeta API | `search --interactive` |
+| `{KEY}:fields` → `activeSprints` | Agile boards API | `dashboard` |
+| `{KEY}:sync_meta` | set by sync itself | staleness check |
+
+**Rules:**
+- Transitions are **not** cached — always fetch live (depend on current ticket state)
+- User search results are **not** cached (users change too frequently)
+- Always check `cache.isSyncStale(projectKey)` and warn user if stale
+
+---
+
+## Sync Enforcement
 
 Commands that need dropdown values (`create`, `update --fields`, `search --interactive`) call
-`requireSyncedField()` from `utils/requireSync.js`. If sync has not been run, the command
-throws a clear error and tells the user to run `jira sync` first.
+`requireSyncedData()` from `utils/requireSync.js`. If sync has never been run, the command
+throws a clear error:
 
 ```
-✖ Error: No sync data found for project JCP.
-  Run jira sync --project JCP first, then retry.
+✖ Error: No sync data found for project MYPROJ.
+  Run jira sync --project MYPROJ first, then retry.
 ```
 
-**The only hardcoded values allowed** are calendar constants that never change:
-```js
-// JCP Planned Month — calendar constant, not project-specific
-['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-
-// JCP Planned Quarter — calendar constant, not project-specific
-['JFM', 'AMJ', 'JAS', 'OND']
-```
-
-**Everything else must come from `cache.get(`${projectKey}:fields`)`:**
-
-| Cache Key | Field | Populated By |
-|---|---|---|
-| `clusters` | JCP Cluster | `jira sync` → createmeta |
-| `channels` | JCP Channel | `jira sync` → createmeta |
-| `workTypes` | JCP Work Type | `jira sync` → createmeta |
-| `planningTypes` | JCP Planning Type | `jira sync` → createmeta |
-| `estimates` | JCP Estimate | `jira sync` → createmeta |
-| `issueTypes` | Issue Types | `jira sync` → project info |
-| `fixVersions` | Fix Versions | `jira sync` → project versions |
-| `components` | Components | `jira sync` → project components |
-| `priorities` | Priorities | `jira sync` → priorities API |
-| `statuses` | Statuses | `jira sync` → createmeta |
-| `environments` | Environment dropdown | `jira sync` → createmeta |
-| `severities` | Severity | `jira sync` → createmeta |
-
-**Never add hardcoded option arrays** to any command file. If a new field is needed,
-add it to `commands/sync.js` → fetch from Jira → store in cache → use via `requireSyncedField()`.
+`requireSyncedField()` is used only for fields that **must** be present (e.g. `issueTypes`).
+Optional fields (fixVersions, components, customFields) use soft checks: `synced.X || []`.
 
 ---
 
@@ -194,16 +175,18 @@ Always select the correct template based on issue type (Bug, Story, Task, Epic).
 
 ---
 
-## Cache Rules
+## AI Providers
 
-- Cache lives in `~/.jira-cli/cache.json` (pure JS JSON file — no native deps)
-- Default TTL: 24 hours (configurable via `CACHE_TTL` env var)
-- Cache keys follow the pattern: `{PROJECT_KEY}:{data_type}`
-  - `JCP:fields` — all field metadata and dropdown options
-  - `JCP:sync_meta` — sync timestamp
-- Always check cache before making API calls for metadata (versions, components, etc.)
-- Transitions are NOT cached — always fetch live (they depend on current ticket state)
-- User search results are NOT cached (users change too frequently)
+Exactly two supported providers — no others:
+
+| Provider | Config key | Model |
+|---|---|---|
+| Anthropic Claude | `ANTHROPIC_API_KEY` | `claude-haiku-4-5-20251001` (upgrade to `claude-sonnet-4-6` for quality) |
+| OpenAI (Codex) | `OPENAI_API_KEY` | `gpt-4o-mini` (upgrade to `gpt-4o` for quality) |
+
+Provider selection order: `AI_PROVIDER` config → Claude (if key present) → OpenAI (if key present) → `null` (AI disabled).
+
+**AI failures must never break the workflow.** All AI functions in `utils/aiHelper.js` return a graceful fallback result when `getProvider()` returns null.
 
 ---
 
@@ -234,7 +217,7 @@ handler: async (argv) => {
 
 1. **Always use `ora` spinners** for any operation > ~300ms (API calls, AI calls, file I/O)
 2. **Always use `chalk`** for colored output — follow this convention:
-   - `chalk.cyan` — issue keys (JCP-1234)
+   - `chalk.cyan` — issue keys (e.g. PROJ-1234)
    - `chalk.green` — success messages
    - `chalk.red` — errors and blockers
    - `chalk.yellow` — warnings
@@ -264,13 +247,13 @@ Run through these manually:
 
 - [ ] `jira doctor` — all checks pass
 - [ ] `jira config show` — credentials display correctly (masked)
-- [ ] `jira sync` — completes without errors
+- [ ] `jira sync` — completes without errors, lists discovered custom fields
 - [ ] `jira list` — shows your tickets
 - [ ] `jira list --filter "bugs"` — AI filter works (or falls back gracefully)
-- [ ] `jira view JCP-XXXX` — shows full ticket details
-- [ ] `jira create --dry-run` — payload preview correct
-- [ ] `jira update JCP-XXXX` — transitions list correctly
-- [ ] `jira comment JCP-XXXX -m "test"` — comment appears in Jira
+- [ ] `jira view PROJ-XXXX` — shows full ticket details
+- [ ] `jira create --dry-run` — payload preview shows custom fields dynamically
+- [ ] `jira update PROJ-XXXX` — transitions list correctly
+- [ ] `jira comment PROJ-XXXX -m "test"` — comment appears in Jira
 - [ ] `jira dashboard` — renders and exits cleanly
 - [ ] Disconnect network → commands fail with clean error messages (no stack traces)
 - [ ] Remove both API keys → `create` still works (AI features skipped gracefully)
@@ -310,6 +293,7 @@ Current dependencies and why they exist:
 - OpenAI uses `gpt-4o-mini` for cost efficiency — upgrade to `gpt-4o` in `aiHelper.js` for higher quality.
 - Anthropic Claude uses `claude-haiku-4-5-20251001` for cost efficiency — upgrade to `claude-sonnet-4-6` in `aiProviders.js` for higher quality.
 - Dashboard auto-refresh uses `setInterval` — very high refresh rates (< 5s) may hit Jira rate limits.
+- `createMeta` API may return different field sets for different issue types. The sync deduplicates by taking the first issue type that exposes each field.
 
 ---
 

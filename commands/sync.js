@@ -4,18 +4,16 @@
  * sync.js
  * `jira sync` — Sync project metadata to local cache.
  *
- * Fetches from Jira API and stores in SQLite cache (~/.jira-cli/cache.db):
+ * Fetches from Jira API and stores in ~/.jira-cli/cache.json:
  *  - Issue types
  *  - Fix versions
  *  - Components
- *  - Affected Systems (custom field)
  *  - Priorities
- *  - All custom field allowed values (Cluster, Channel, Work Type, etc.)
+ *  - All custom dropdown fields (dynamically discovered — works for any project)
  *  - Active sprints
  *  - Transitions (from a sample open issue)
- *  - Team members
  *
- * Run: `jira sync` (or `jira sync --project JCP`)
+ * Run: `jira sync` (or `jira sync --project YOURKEY`)
  * Results are used by create, update, search commands for dropdown options.
  */
 
@@ -37,19 +35,7 @@ const { printError } = require('../utils/errorParser');
 const cache = require('../utils/cache');
 const logger = require('../utils/logger');
 
-// Custom field IDs for JCP-specific dropdowns (discovered from JCP-2681 analysis)
-const JCP_CUSTOM_FIELDS = {
-  clusters: 'customfield_11371',        // JCP Cluster
-  channels: 'customfield_10455',        // JCP Channel
-  workTypes: 'customfield_17322',       // JCP Work Type
-  planningTypes: 'customfield_17321',   // JCP Planning Type
-  deliveryStates: 'customfield_17320',  // JCP Delivery State
-  estimates: 'customfield_17356',       // JCP Estimate
-  environments: 'customfield_10030',    // Environment
-  severities: 'customfield_10033',      // Severity
-  ticketCategories: 'customfield_10441',// Ticket Category
-  requestingTeams: 'customfield_10381', // Requesting Team
-};
+// No hardcoded field IDs — all custom fields are discovered dynamically from each project's createMeta.
 
 module.exports = {
   command: 'sync',
@@ -117,51 +103,55 @@ module.exports = {
         results.components = [];
       }
 
-      // ── 4. Create Metadata (all field allowed values) ──────────────────────
-      const step4 = ora('  Field options (Cluster, Channel, Work Type...)...').start();
+      // ── 4. Create Metadata (all custom dropdown fields — fully dynamic) ──────
+      const step4 = ora('  Custom field options (discovering all dropdowns)...').start();
       try {
         const meta = await getCreateMeta(projectKey);
         if (meta) {
-          // Extract custom field options from the first issue type (Task usually has all fields)
-          const allFields = {};
+          // Dynamically discover ALL custom fields that have allowed values.
+          // This works for any Jira project — no hardcoded field IDs needed.
+          const customFields = {};    // fieldLabel → [option, ...]
+          const customFieldIds = {};  // fieldLabel → customfield_XXXXX
+
           meta.issuetypes?.forEach((issueType) => {
-            Object.entries(issueType.fields || {}).forEach(([fieldKey, fieldMeta]) => {
-              if (fieldMeta.allowedValues && !allFields[fieldKey]) {
-                allFields[fieldKey] = fieldMeta.allowedValues.map(
-                  (v) => v.name || v.value || v.key
-                ).filter(Boolean);
+            Object.entries(issueType.fields || {}).forEach(([fieldId, fieldMeta]) => {
+              if (
+                fieldId.startsWith('customfield_') &&
+                fieldMeta.allowedValues?.length > 0 &&
+                fieldMeta.name &&
+                !customFields[fieldMeta.name] // dedup: first issue type wins
+              ) {
+                const values = fieldMeta.allowedValues
+                  .map((v) => v.name || v.value || v.key)
+                  .filter(Boolean);
+                if (values.length > 0) {
+                  customFields[fieldMeta.name] = values;
+                  customFieldIds[fieldMeta.name] = fieldId;
+                }
               }
             });
           });
 
-          // Map to named keys
-          Object.entries(JCP_CUSTOM_FIELDS).forEach(([name, fieldId]) => {
-            if (allFields[fieldId]) {
-              results[name] = allFields[fieldId];
-            }
-          });
+          results.customFields = customFields;
+          results.customFieldIds = customFieldIds;
 
-          // Also extract affected systems
-          const affectedSystemsId = 'customfield_10056';
-          if (allFields[affectedSystemsId]) {
-            results.affectedSystems = allFields[affectedSystemsId];
-          }
-
-          // Statuses from issue types
+          // Statuses (used by `jira search --interactive`)
           results.statuses = [...new Set(
-            meta.issuetypes?.flatMap((t) => {
-              return Object.values(t.fields || {})
+            meta.issuetypes?.flatMap((t) =>
+              Object.values(t.fields || {})
                 .filter((f) => f.schema?.type === 'status')
-                .flatMap((f) => f.allowedValues?.map((v) => v.name) || []);
-            }) || []
+                .flatMap((f) => f.allowedValues?.map((v) => v.name) || [])
+            ) || []
           )];
-        }
 
-        const fieldCount = Object.values(JCP_CUSTOM_FIELDS).filter((id) => results[id.replace('customfield_', '')] || true).length;
-        step4.succeed(`  Field options: synced (Cluster, Channel, Work Type + more)`);
+          const fieldCount = Object.keys(customFields).length;
+          step4.succeed(`  Custom fields: ${fieldCount} dropdown field(s) discovered`);
+        } else {
+          step4.succeed('  Custom fields: none found (createMeta returned empty)');
+        }
       } catch (e) {
-        step4.fail('  Field options — failed');
-        errors.push(`Field options: ${e.message}`);
+        step4.fail('  Custom fields — failed');
+        errors.push(`Custom fields: ${e.message}`);
       }
 
       // ── 5. Priorities ──────────────────────────────────────────────────────
@@ -221,6 +211,7 @@ module.exports = {
       } catch (e) {
         step7.fail('  Transition map — failed');
         results.sampleTransitions = [];
+        errors.push(`Transition map: ${e.message}`);
       }
 
       // ── Store everything to cache ─────────────────────────────────────────
@@ -229,14 +220,15 @@ module.exports = {
 
       // ── Summary ───────────────────────────────────────────────────────────
       console.log(chalk.bold(`\n✅ Sync complete for ${chalk.cyan(projectKey)}`));
-      console.log(chalk.dim(`   Issue types     : ${(results.issueTypes || []).join(', ')}`));
-      console.log(chalk.dim(`   Fix versions    : ${(results.fixVersions || []).length}`));
-      console.log(chalk.dim(`   Components      : ${(results.components || []).length}`));
-      console.log(chalk.dim(`   Affected systems: ${(results.affectedSystems || []).length}`));
-      console.log(chalk.dim(`   JCP Clusters    : ${(results.clusters || []).length}`));
-      console.log(chalk.dim(`   JCP Channels    : ${(results.channels || []).length}`));
-      console.log(chalk.dim(`   Active sprints  : ${(results.activeSprints || []).length}`));
-      console.log(chalk.dim(`   Cache TTL       : 24 hours\n`));
+      console.log(chalk.dim(`   Issue types    : ${(results.issueTypes || []).join(', ')}`));
+      console.log(chalk.dim(`   Fix versions   : ${(results.fixVersions || []).length}`));
+      console.log(chalk.dim(`   Components     : ${(results.components || []).length}`));
+      console.log(chalk.dim(`   Custom fields  : ${Object.keys(results.customFields || {}).length} dropdown(s)`));
+      if (Object.keys(results.customFields || {}).length > 0) {
+        console.log(chalk.dim(`     → ${Object.keys(results.customFields).join(', ')}`));
+      }
+      console.log(chalk.dim(`   Active sprints : ${(results.activeSprints || []).length}`));
+      console.log(chalk.dim(`   Cache TTL      : 24 hours\n`));
 
       if (errors.length > 0) {
         console.log(chalk.yellow(`⚠  Some items failed to sync:`));

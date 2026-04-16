@@ -1,6 +1,6 @@
 # Jira CLI — Setup Guide
 
-A production-ready terminal tool for managing Jira tickets, built for the JCP project on Atlassian Cloud.
+A production-ready terminal tool for managing Jira tickets. Works with any Jira Cloud workspace.
 
 ---
 
@@ -19,24 +19,15 @@ There are three ways to install depending on your situation.
 
 ---
 
-### Option A — Install from GitHub Packages (recommended)
+### Option A — Install from npm (recommended)
 
-This is the standard install for anyone on the team. One command, works anywhere Node is installed.
-
-**First time only — authenticate with GitHub Packages:**
-
-```bash
-npm login --scope=@g-abhishek --registry=https://npm.pkg.github.com
-# Enter your GitHub username, a Personal Access Token (with read:packages scope), and email
-```
-
-**Then install globally:**
+Published to the public npm registry. One command, works anywhere Node is installed.
 
 ```bash
 npm install -g @g-abhishek/jira-cli
 ```
 
-To update to the latest version in future:
+To update to the latest version:
 
 ```bash
 npm install -g @g-abhishek/jira-cli@latest
@@ -133,7 +124,7 @@ jira sync
 
 This fetches and caches:
 - Fix versions, components, issue types
-- JCP-specific dropdown options (Cluster, Channel, Work Type, etc.)
+- Custom dropdown fields (dynamically discovered — Cluster, Channel, Work Type, or whatever your project has)
 - Active sprint information
 - Available transitions
 

@@ -21,50 +21,74 @@ const { resolveProjectKeyInteractive } = require('../utils/projectResolver');
 const { convertToJQL } = require('../utils/aiHelper');
 const { printError } = require('../utils/errorParser');
 const { isSyncStale } = require('../utils/cache');
+const { printTable } = require('../utils/table');
 const logger = require('../utils/logger');
 
-// Status → colored badge
+// ── Status coloring ────────────────────────────────────────────────────────────
+
 const STATUS_COLORS = {
-  'To Do': chalk.gray,
-  'In Progress': chalk.blue,
-  'Code Review': chalk.cyan,
-  'SIT': chalk.magenta,
-  'UAT': chalk.yellow,
-  Done: chalk.green,
-  Closed: chalk.green,
-  Blocked: chalk.red,
+  'To Do':                    chalk.gray,
+  'In Progress':              chalk.blue,
+  'Code Review':              chalk.cyan,
+  'LEAD REVIEW':              chalk.cyan,
+  'SIT':                      chalk.magenta,
+  'UAT':                      chalk.yellow,
+  'UAT Verification':         chalk.yellow,
+  'On Hold':                  chalk.yellow,
+  Done:                       chalk.green,
+  Closed:                     chalk.green,
+  Blocked:                    chalk.red,
+  Duplicate:                  chalk.dim,
   'Waiting for Dev/Requestor': chalk.yellow,
 };
 
 function colorStatus(status) {
   const fn = STATUS_COLORS[status] || chalk.white;
-  return fn(`[${status}]`);
+  return fn(status);
 }
 
-// Priority → colored symbol
+// ── Priority icon ──────────────────────────────────────────────────────────────
+
 const PRIORITY_SYMBOLS = {
-  Blocker: chalk.red('🔴'),
-  High: chalk.red('↑'),
-  Medium: chalk.yellow('→'),
-  Low: chalk.green('↓'),
-  Minor: chalk.dim('↓'),
+  Blocker: chalk.red('●'),
+  High:    chalk.red('↑'),
+  Medium:  chalk.yellow('→'),
+  Low:     chalk.green('↓'),
+  Minor:   chalk.dim('↓'),
 };
 
 function priorityIcon(priority) {
   return PRIORITY_SYMBOLS[priority] || chalk.dim('·');
 }
 
+// ── Issue type short label ─────────────────────────────────────────────────────
+
+const TYPE_COLORS = {
+  Bug:      chalk.red,
+  Story:    chalk.blue,
+  Task:     chalk.cyan,
+  Epic:     chalk.magenta,
+  'Sub-task': chalk.dim,
+};
+
+function colorType(type) {
+  const fn = TYPE_COLORS[type] || chalk.white;
+  return fn(type);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 module.exports = {
   command: 'list',
   desc: 'List your assigned Jira tickets',
   builder: (yargs) =>
     yargs
-      .option('status', { alias: 's', type: 'string', desc: 'Filter by status (e.g. "In Progress")' })
-      .option('type', { alias: 't', type: 'string', desc: 'Filter by issue type (Bug, Task, Story...)' })
-      .option('limit', { alias: 'l', type: 'number', default: 25, desc: 'Number of results' })
-      .option('page', { alias: 'p', type: 'number', default: 0, desc: 'Page number (0-indexed)' })
-      .option('filter', { alias: 'f', type: 'string', desc: 'Plain-English filter (AI-powered)' })
-      .option('json', { type: 'boolean', default: false, desc: 'Output raw JSON' }),
+      .option('status',  { alias: 's', type: 'string',  desc: 'Filter by status (e.g. "In Progress")' })
+      .option('type',    { alias: 't', type: 'string',  desc: 'Filter by issue type (Bug, Task, Story...)' })
+      .option('limit',   { alias: 'l', type: 'number',  default: 25,   desc: 'Number of results' })
+      .option('page',    { alias: 'p', type: 'number',  default: 0,    desc: 'Page number (0-indexed)' })
+      .option('filter',  { alias: 'f', type: 'string',  desc: 'Plain-English filter (AI-powered)' })
+      .option('json',    {             type: 'boolean', default: false, desc: 'Output raw JSON' }),
 
   handler: async (argv) => {
     try {
@@ -72,42 +96,44 @@ module.exports = {
 
       // Stale sync warning
       if (isSyncStale(projectKey) && !argv.json) {
-        console.log(chalk.yellow(`⚠  Sync data is stale. Run ${chalk.bold('jira sync')} to refresh field options.\n`));
+        console.log(chalk.yellow(`⚠  Sync data is stale. Run ${chalk.bold('jira sync')} to refresh.\n`));
       }
 
       let jql;
 
       if (argv.filter) {
-        // AI-powered plain English → JQL
         const spinner = ora('Converting filter to JQL...').start();
         const result = await convertToJQL(argv.filter, projectKey);
         spinner.stop();
 
         jql = result.jql;
         if (!argv.json) {
-          const tag = result.aiUsed ? chalk.cyan('[AI]') : chalk.dim('[fallback]');
-          console.log(`${tag} JQL: ${chalk.dim(jql)}\n`);
+          if (result.aiUsed) {
+            console.log(`${chalk.cyan('[AI]')} JQL: ${chalk.dim(jql)}\n`);
+          } else if (result.reason === 'api_error') {
+            console.log(`${chalk.yellow('[smart-fallback]')} JQL: ${chalk.dim(jql)}`);
+            console.log(chalk.red(`  ✖ AI error: ${result.errorMsg}`));
+            console.log(chalk.dim('  Run `jira logs` to see full error details.\n'));
+          } else {
+            console.log(`${chalk.yellow('[smart-fallback]')} JQL: ${chalk.dim(jql)}`);
+            console.log(chalk.dim('  Tip: Add an AI key for smarter filtering → jira config set ANTHROPIC_API_KEY sk-ant-...\n'));
+          }
         }
       } else {
-        // Manual JQL construction
         const conditions = [
           `project = ${projectKey}`,
           'assignee = currentUser()',
         ];
-
         if (argv.status) conditions.push(`status = "${argv.status}"`);
-        if (argv.type) conditions.push(`issuetype = "${argv.type}"`);
-
+        if (argv.type)   conditions.push(`issuetype = "${argv.type}"`);
         jql = conditions.join(' AND ') + ' ORDER BY updated DESC';
       }
 
       const spinner = ora('Fetching your tickets...').start();
-
       const result = await searchIssues(jql, {
-        startAt: argv.page * argv.limit,
         maxResults: argv.limit,
+        nextPageToken: argv.page > 0 ? String(argv.page * argv.limit) : undefined,
       });
-
       spinner.stop();
 
       logger.info(`jira list: fetched ${result.issues?.length} issues`);
@@ -118,46 +144,66 @@ module.exports = {
       }
 
       const issues = result.issues || [];
-      const total = result.total || 0;
+      const total  = result.total  || 0;
 
       if (issues.length === 0) {
-        console.log(chalk.dim('No tickets found matching your criteria.'));
+        console.log(chalk.dim('\nNo tickets found matching your criteria.\n'));
         return;
       }
 
-      // Header
+      // ── Header ──────────────────────────────────────────────────────────────
       console.log(
-        chalk.bold(`\n📋 Your tickets in ${chalk.cyan(projectKey)} `) +
-          chalk.dim(`(${issues.length} of ${total})\n`)
+        chalk.bold(`\n📋 Your tickets in ${chalk.cyan(projectKey)}`) +
+        chalk.dim(`  (${issues.length} of ${total})\n`)
       );
 
-      // Print each issue
-      issues.forEach((issue) => {
-        const f = issue.fields;
-        const key = chalk.bold.cyan(issue.key.padEnd(12));
-        const status = colorStatus(f.status?.name || 'Unknown');
-        const priority = priorityIcon(f.priority?.name);
-        const points = f.customfield_10026 ? chalk.dim(` [${f.customfield_10026}sp]`) : '';
-        const summary = f.summary?.slice(0, 65) || '(no summary)';
-        const cluster = f.customfield_11371?.value ? chalk.dim(` · ${f.customfield_11371.value}`) : '';
-
-        console.log(`${priority} ${key} ${status}${points} ${summary}${cluster}`);
+      // ── Table ───────────────────────────────────────────────────────────────
+      printTable({
+        columns: [
+          {
+            key: 'priority', header: ' ', width: 1,
+            render: (v) => v,  // already an icon
+          },
+          {
+            key: 'key', header: 'Key', width: 11,
+            render: (v) => chalk.bold.cyan(v),
+          },
+          {
+            key: 'type', header: 'Type', width: 9,
+            render: (v) => colorType(v),
+          },
+          {
+            key: 'status', header: 'Status', width: 18,
+            render: (v) => colorStatus(v),
+          },
+          {
+            key: 'sp', header: 'SP', width: 3, align: 'right',
+            render: (v) => v ? chalk.dim(v) : chalk.dim('-'),
+          },
+          {
+            key: 'summary', header: 'Summary', width: 'fill',
+            render: (v) => chalk.white(v),
+          },
+        ],
+        rows: issues.map((issue) => ({
+          priority: priorityIcon(issue.fields.priority?.name),
+          key:      issue.key,
+          type:     issue.fields.issuetype?.name || '?',
+          status:   issue.fields.status?.name    || 'Unknown',
+          sp:       issue.fields.customfield_10026 != null
+                      ? String(issue.fields.customfield_10026)
+                      : '',
+          summary:  issue.fields.summary || '(no summary)',
+        })),
       });
 
-      // Pagination hint
-      if (total > argv.limit) {
-        const nextPage = argv.page + 1;
-        const remaining = total - (argv.page + 1) * argv.limit;
-        if (remaining > 0) {
-          console.log(
-            chalk.dim(
-              `\n  ${remaining} more tickets. Use --page ${nextPage} to see next page.`
-            )
-          );
-        }
+      // ── Pagination ───────────────────────────────────────────────────────────
+      if (result.nextPageToken) {
+        console.log(chalk.dim(`\n  More results — use --page ${argv.page + 1} to continue.\n`));
+      } else {
+        console.log();
       }
 
-      console.log();
     } catch (err) {
       printError(err);
       logger.error(`list command failed: ${err.message}`);

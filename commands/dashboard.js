@@ -66,7 +66,7 @@ module.exports = {
             maxResults: 100,
             fields: [
               'summary', 'status', 'priority', 'assignee', 'issuetype',
-              'customfield_10026', 'customfield_11371',
+              'customfield_10026', // Story Points — universal field
             ],
           });
 
