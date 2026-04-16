@@ -1,6 +1,6 @@
 {
   "name": "@g-abhishek/jira-cli",
-  "version": "1.1.7",
+  "version": "1.1.9",
   "description": "A production-ready Jira CLI for developers — list, create, update, and search issues from the terminal",
   "main": "index.js",
   "bin": {
@@ -34,6 +34,7 @@
     "chalk": "^4.1.2",
     "dotenv": "^16.3.1",
     "inquirer": "^8.2.6",
+    "inquirer-autocomplete-prompt": "^2.0.1",
     "openai": "^4.28.0",
     "ora": "^5.4.1",
     "winston": "^3.11.0",

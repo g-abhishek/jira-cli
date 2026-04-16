@@ -89,18 +89,32 @@ This launches an interactive wizard that:
 
 ---
 
-## Getting an AI API Key (Optional)
+## Getting an AI Provider (Optional)
 
 AI powers:
 - AI-enhanced ticket descriptions
 - Plain-English → JQL conversion (`--filter "bugs this week"`)
 - Ticket generation from git commits (`--from-git`)
 - Issue TL;DR summaries (`--summarize`)
+- CLI help assistant (`jira ask "..."`)
 
-The CLI works without any AI key — AI features are gracefully skipped.
-Configure one or both providers; Claude is preferred when both are set.
+The CLI works without any AI provider — AI features are gracefully skipped.
 
-### Option 1 — Anthropic Claude (recommended)
+Providers are checked in this priority order: Claude Code CLI → Anthropic API → OpenAI → none.
+
+### Option 0 — Claude Code CLI (recommended — no API key needed)
+
+If your organisation blocks external AI API endpoints (e.g. `api.anthropic.com`, `api.openai.com`), this is the best option. Claude Code runs locally using your existing Claude authentication — no separate API key required.
+
+```bash
+npm install -g @anthropic-ai/claude-code
+jira config set AI_PROVIDER claude-code
+jira doctor   # confirm it's detected
+```
+
+The CLI will auto-detect Claude Code without needing `AI_PROVIDER` set, but setting it explicitly ensures it's always preferred.
+
+### Option 1 — Anthropic Claude API
 
 1. Go to [https://console.anthropic.com/](https://console.anthropic.com/)
 2. Create an API key
@@ -144,9 +158,11 @@ Credentials are stored at `~/.jira-cli/config.json` (not in your project directo
   "DEFAULT_PROJECT": "JCP",
   "ANTHROPIC_API_KEY": "sk-ant-...",
   "OPENAI_API_KEY": "sk-...",
-  "AI_PROVIDER": "claude"
+  "AI_PROVIDER": "claude-code"
 }
 ```
+
+`AI_PROVIDER` values: `claude-code` (local Claude Code CLI, no API key), `claude` (Anthropic API), `openai`, or omit for auto-detect.
 
 You can also edit values directly:
 
@@ -300,6 +316,19 @@ jira doctor
 
 Checks: Node version, credentials, Jira connectivity, project access, AI provider keys, git integration, cache freshness.
 
+### `jira ask`
+AI-powered help assistant scoped to this CLI. Ask anything about commands, configuration, troubleshooting, or JQL.
+
+```bash
+jira ask "how do I set up AI?"
+jira ask "what does jira sync do?"
+jira ask "how to filter tickets by assignee"
+jira ask "is my Anthropic key configured?"    # reads your live config and answers directly
+jira ask "why is my sync stale?"
+```
+
+Requires an AI provider. If none is configured, the command will tell you how to set one up.
+
 ### `jira logs`
 View CLI activity logs.
 
@@ -368,7 +397,17 @@ to get the new version.
 **`AI features not working`**
 - Run `jira doctor` to check your AI provider configuration
 - Run `jira config show` to see which providers are detected as active
-- The CLI works without any AI key — features fall back gracefully
+- The CLI works without any AI provider — features fall back gracefully
+
+**`AI filter shows [smart-fallback] instead of [AI]`**
+- Your AI provider may be configured but blocked by a corporate VPN or firewall
+- Run `jira logs` to see the exact error (look for `JQL conversion failed`)
+- If the error says `Connection error` or `ECONNREFUSED`, your network is blocking `api.openai.com` or `api.anthropic.com`
+- Switch to Claude Code CLI which runs locally and needs no outbound API call:
+  ```bash
+  npm install -g @anthropic-ai/claude-code
+  jira config set AI_PROVIDER claude-code
+  ```
 
 ---
 

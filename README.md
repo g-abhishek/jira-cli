@@ -197,6 +197,20 @@ Run this any time something isn't working.
 
 ---
 
+### `jira ask`
+AI-powered help assistant scoped to this CLI. Ask anything about commands, config, troubleshooting, or JQL.
+
+```bash
+jira ask "how do I set up an AI provider?"
+jira ask "what does jira sync do?"
+jira ask "how to filter tickets by status"
+jira ask "is my OpenAI key configured?"   # Reads your live config and answers directly
+```
+
+Requires an AI provider to be configured (see AI Features below).
+
+---
+
 ### `jira logs`
 View recent activity and errors.
 
@@ -210,7 +224,7 @@ jira logs --level error            # Errors only
 
 ## AI Features (Optional)
 
-If you set an `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, these features unlock:
+If an AI provider is configured, these features unlock:
 
 | Feature | Command |
 |---|---|
@@ -218,19 +232,28 @@ If you set an `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, these features unlock:
 | Generate ticket from git commits | `jira create --from-git` |
 | Enhance summary + description | Auto-runs during `jira create` |
 | TL;DR summary | `jira view PROJ-1234 --summarize` |
+| CLI help assistant | `jira ask "how do I..."` |
 
-**The CLI works fully without any AI key** — AI steps are silently skipped.
+**The CLI works fully without any AI provider** — AI steps are silently skipped.
 
-**Supported providers:**
+**Supported providers (checked in this order):**
 
-| Provider | Config key |
-|---|---|
-| Anthropic Claude | `ANTHROPIC_API_KEY` |
-| OpenAI (Codex) | `OPENAI_API_KEY` |
+| Priority | Provider | How to enable |
+|---|---|---|
+| 1 | Claude Code CLI (local) | Install Claude Code — no API key needed |
+| 2 | Anthropic Claude API | Set `ANTHROPIC_API_KEY` |
+| 3 | OpenAI (Codex) | Set `OPENAI_API_KEY` |
 
-Claude is preferred when both keys are set. To force one:
+**Recommended — Claude Code (no API key required):**
 ```bash
-jira config set AI_PROVIDER openai
+npm install -g @anthropic-ai/claude-code   # install once
+jira config set AI_PROVIDER claude-code    # tell jira to use it
+```
+
+To force a specific provider:
+```bash
+jira config set AI_PROVIDER claude-code   # use local Claude Code CLI
+jira config set AI_PROVIDER openai        # force OpenAI
 ```
 
 ---
@@ -263,9 +286,12 @@ Credentials are stored at `~/.jira-cli/config.json` (not in your project directo
   "JIRA_API_TOKEN": "your-token",
   "DEFAULT_PROJECT": "MYPROJ",
   "ANTHROPIC_API_KEY": "sk-ant-...",
-  "AI_PROVIDER": "claude"
+  "OPENAI_API_KEY": "sk-...",
+  "AI_PROVIDER": "claude-code"
 }
 ```
+
+`AI_PROVIDER` can be `claude-code` (local, no API key), `claude` (Anthropic API), `openai`, or omitted for auto-detect.
 
 ---
 

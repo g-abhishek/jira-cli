@@ -14,6 +14,7 @@
 const chalk = require('chalk');
 const ora = require('ora');
 const inquirer = require('inquirer');
+const { autoList } = require('../utils/prompts');
 const { getIssue, getTransitions, transitionIssue } = require('../services/jiraService');
 const { createBranchForIssue, isGitRepo } = require('../utils/gitHelper');
 const { printError } = require('../utils/errorParser');
@@ -65,16 +66,13 @@ module.exports = {
           // Let user pick from available transitions
           console.log(chalk.yellow('  Could not auto-detect "In Progress" transition.'));
           const ans = await inquirer.prompt([
-            {
-              type: 'list',
-              name: 'transition',
-              message: 'Which transition should "start" use?',
-              choices: transitions.map((t) => ({
+            autoList('transition', 'Which transition should "start" use?',
+              transitions.map((t) => ({
                 name: `${t.to?.name || t.name}  ${chalk.dim(`(${t.name})`)}`,
                 value: t,
                 short: t.to?.name || t.name,
-              })),
-            },
+              }))
+            ),
           ]);
           inProgressTransition = ans.transition;
         }

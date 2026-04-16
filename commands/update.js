@@ -18,6 +18,7 @@
 const chalk = require('chalk');
 const ora = require('ora');
 const inquirer = require('inquirer');
+const { autoList } = require('../utils/prompts');
 const { getIssue, getTransitions, transitionIssue, updateIssue } = require('../services/jiraService');
 const { printError } = require('../utils/errorParser');
 const { validate, IssueKeySchema } = require('../validators/schema');
@@ -87,13 +88,7 @@ module.exports = {
         });
 
         const ans = await inquirer.prompt([
-          {
-            type: 'list',
-            name: 'transition',
-            message: 'Move to:',
-            choices,
-            pageSize: 15,
-          },
+          autoList('transition', 'Move to:', choices),
         ]);
         selectedTransition = ans.transition;
       }
@@ -110,12 +105,7 @@ module.exports = {
 
         // Core field prompts
         const corePrompts = [
-          {
-            type: 'list',
-            name: '_priority',
-            message: 'Update priority? (current: ' + (f.priority?.name || 'none') + ')',
-            choices: ['(keep)', ...priorities],
-          },
+          autoList('_priority', 'Update priority? (current: ' + (f.priority?.name || 'none') + ')', ['(keep)', ...priorities]),
           {
             type: 'number',
             name: '_storyPoints',
@@ -125,13 +115,9 @@ module.exports = {
         ];
 
         // Append one prompt per synced custom dropdown field
-        const customPrompts = Object.entries(customFields).map(([label, values]) => ({
-          type: 'list',
-          name: `_cf_${label}`,
-          message: `Update ${label}?`,
-          choices: ['(keep)', ...values],
-          pageSize: 12,
-        }));
+        const customPrompts = Object.entries(customFields).map(([label, values]) =>
+          autoList(`_cf_${label}`, `Update ${label}?`, ['(keep)', ...values])
+        );
 
         // Comment always last
         const commentPrompt = [{

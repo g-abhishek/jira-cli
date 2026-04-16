@@ -40,6 +40,7 @@ These specific versions are pinned because newer versions dropped CommonJS suppo
 | `chalk` | `^4.x` | v5+ is ESM-only |
 | `ora` | `^5.x` | v6+ is ESM-only |
 | `inquirer` | `^8.x` | v9+ is ESM-only |
+| `inquirer-autocomplete-prompt` | `^2.x` | v3+ is ESM-only; must match inquirer v8 |
 
 **Never upgrade these without verifying CommonJS compatibility.**
 
@@ -77,6 +78,9 @@ jira-cli/
 - `services/jiraService.js` contains ALL Jira API calls — no API calls in commands
 - `utils/` files must not make direct API calls
 - Each command file exports exactly: `{ command, desc, builder, handler }`
+
+**Key utilities:**
+- `utils/prompts.js → autoList()` — use instead of `type: 'list'` for any prompt with potentially long or dynamic choices. Provides live search filtering. Automatically pins `(keep)` / `(skip)` items at the top during search. Never use bare `type: 'list'` for dynamic/custom-field choices.
 
 ---
 
@@ -301,6 +305,7 @@ Current dependencies and why they exist:
 | `chalk@4` | Terminal color output (CommonJS, not v5) |
 | `dotenv` | Load .env files |
 | `inquirer@8` | Interactive prompts with arrow keys (CommonJS, not v9) |
+| `inquirer-autocomplete-prompt@2` | Searchable list prompt for status picker (CommonJS, not v3) |
 | `openai` | OpenAI (Codex) API client — one of two supported AI providers |
 | `ora@5` | Spinner during API calls (CommonJS, not v6) |
 | `winston` | Structured logging with file rotation |

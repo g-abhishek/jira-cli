@@ -22,6 +22,7 @@
 const chalk = require('chalk');
 const ora = require('ora');
 const inquirer = require('inquirer');
+const { autoList } = require('../utils/prompts');
 const { createIssue, getIssueTypes } = require('../services/jiraService');
 const { resolveProjectKeyInteractive } = require('../utils/projectResolver');
 const { enhanceTicket, generateFromGit, getDescriptionTemplate } = require('../utils/aiHelper');
@@ -68,12 +69,7 @@ module.exports = {
       let issueType = argv.type;
       if (!issueType) {
         const ans = await inquirer.prompt([
-          {
-            type: 'list',
-            name: 'issueType',
-            message: 'Issue type:',
-            choices: issueTypes,
-          },
+          autoList('issueType', 'Issue type:', issueTypes),
         ]);
         issueType = ans.issueType;
       }
@@ -149,13 +145,7 @@ module.exports = {
 
       // ── Step 4: Core Fields ──────────────────────────────────────────────────
       const coreAnswers = await inquirer.prompt([
-        {
-          type: 'list',
-          name: 'priority',
-          message: 'Priority:',
-          choices: priorities,
-          default: priorities.includes('Medium') ? 'Medium' : priorities[0],
-        },
+        autoList('priority', 'Priority:', priorities),
         {
           type: 'number',
           name: 'storyPoints',
@@ -177,13 +167,9 @@ module.exports = {
       const customFieldAnswers = {};  // fieldId → { value: "..." }
 
       if (Object.keys(customFields).length > 0) {
-        const customPrompts = Object.entries(customFields).map(([label, values]) => ({
-          type: 'list',
-          name: label,
-          message: `${label}:`,
-          choices: ['(skip)', ...values],
-          pageSize: 12,
-        }));
+        const customPrompts = Object.entries(customFields).map(([label, values]) =>
+          autoList(label, `${label}:`, ['(skip)', ...values])
+        );
 
         const rawCustomAnswers = await inquirer.prompt(customPrompts);
 
