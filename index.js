@@ -77,6 +77,7 @@ yargs
   .command(require('./commands/config'))
   .command(require('./commands/doctor'))
   .command(require('./commands/logs'))
+  .command(require('./commands/ask'))
 
   // ── Global Options ───────────────────────────────────────────────────────────
   .option('verbose', {
@@ -97,6 +98,7 @@ yargs
   .example('$0 dashboard', 'Open sprint board')
   .example('$0 sync', 'Sync project metadata')
   .example('$0 doctor', 'Check setup health')
+  .example('$0 ask "how to set up AI"', 'AI-powered help')
 
   // ── Middleware ────────────────────────────────────────────────────────────────
   .middleware((argv) => {
@@ -105,7 +107,7 @@ yargs
     }
 
     // Warn if no config found and command is not config/doctor
-    const skipConfigCheck = ['config', 'doctor', 'logs', 'help', '--help', '-h', '--version'];
+    const skipConfigCheck = ['config', 'doctor', 'logs', 'ask', 'help', '--help', '-h', '--version'];
     const cmd = argv._[0];
     if (cmd && !skipConfigCheck.includes(cmd)) {
       const hasConfig =

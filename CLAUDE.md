@@ -177,16 +177,19 @@ Always select the correct template based on issue type (Bug, Story, Task, Epic).
 
 ## AI Providers
 
-Exactly two supported providers — no others:
+Three supported providers, checked in this priority order:
 
-| Provider | Config key | Model |
-|---|---|---|
-| Anthropic Claude | `ANTHROPIC_API_KEY` | `claude-haiku-4-5-20251001` (upgrade to `claude-sonnet-4-6` for quality) |
-| OpenAI (Codex) | `OPENAI_API_KEY` | `gpt-4o-mini` (upgrade to `gpt-4o` for quality) |
+| Priority | Provider | Config key | Requires |
+|---|---|---|---|
+| 1 | Claude Code CLI | `AI_PROVIDER=claude-code` | `claude` binary in PATH (no API key) |
+| 2 | Anthropic Claude API | `ANTHROPIC_API_KEY` | API key from console.anthropic.com |
+| 3 | OpenAI (Codex) | `OPENAI_API_KEY` | API key from platform.openai.com |
 
-Provider selection order: `AI_PROVIDER` config → Claude (if key present) → OpenAI (if key present) → `null` (AI disabled).
+Provider selection order: `AI_PROVIDER` config (explicit) → Claude Code CLI (auto) → Anthropic (auto) → OpenAI (auto) → `null` (smart-fallback JQL).
 
-**AI failures must never break the workflow.** All AI functions in `utils/aiHelper.js` return a graceful fallback result when `getProvider()` returns null.
+Claude Code CLI is detected by running `claude --version` — no API key needed, uses existing Claude Code authentication.
+
+**AI failures must never break the workflow.** All AI functions in `utils/aiHelper.js` return a graceful fallback result when `getProvider()` returns null. Smart fallback JQL (`buildFallbackJQL()` in `utils/aiHelper.js`) handles common date/status/type patterns without AI.
 
 ---
 
@@ -238,6 +241,25 @@ handler: async (argv) => {
 4. Add new Jira API methods to `services/jiraService.js`
 5. Add Zod schema to `validators/schema.js`
 6. Add usage examples to `SETUP.md`
+7. **Update `README.md`** — add the command to the commands table and examples section
+8. **Update `SETUP.md`** — add usage examples and any new config keys
+9. **Update this file (`CLAUDE.md`)** — reflect any architecture changes, new config keys, new providers, or new utilities
+
+---
+
+## Self-Update Rule (IMPORTANT)
+
+**Every time a new feature, command, config key, AI provider, or utility is added, the following files MUST be updated in the same change:**
+
+| File | What to update |
+|---|---|
+| `CLAUDE.md` | Architecture rules, commands list, AI providers, file structure, testing checklist |
+| `README.md` | Commands table, usage examples, config options, AI setup section |
+| `SETUP.md` | Step-by-step usage examples for the new feature |
+
+This ensures `jira ask` always has up-to-date knowledge (it reads `README.md` and `SETUP.md` at runtime) and AI agents working on this codebase always have accurate context.
+
+**Never ship a new feature without updating all three docs.**
 
 ---
 
@@ -255,8 +277,9 @@ Run through these manually:
 - [ ] `jira update PROJ-XXXX` — transitions list correctly
 - [ ] `jira comment PROJ-XXXX -m "test"` — comment appears in Jira
 - [ ] `jira dashboard` — renders and exits cleanly
+- [ ] `jira ask "how to set up AI"` — returns a helpful answer
 - [ ] Disconnect network → commands fail with clean error messages (no stack traces)
-- [ ] Remove both API keys → `create` still works (AI features skipped gracefully)
+- [ ] Remove both API keys + no claude binary → `create` still works (AI features skipped gracefully)
 
 ---
 
