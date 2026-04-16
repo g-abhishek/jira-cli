@@ -2,13 +2,14 @@
 
 /**
  * aiProviders.js
- * Manages two supported AI providers: Anthropic Claude and OpenAI (Codex).
+ * Manages three supported AI providers.
  *
  * Auto-detection priority:
- *   1. User's preferred provider in config (AI_PROVIDER = 'claude' | 'openai')
- *   2. Claude  — if ANTHROPIC_API_KEY is set
- *   3. OpenAI  — if OPENAI_API_KEY is set
- *   4. None    — AI features disabled, CLI still fully works
+ *   1. User's preferred provider in config (AI_PROVIDER = 'claude-code' | 'claude' | 'openai')
+ *   2. Claude Code CLI — if `claude` binary is in PATH (no API key needed)
+ *   3. Anthropic Claude — if ANTHROPIC_API_KEY is set
+ *   4. OpenAI — if OPENAI_API_KEY is set
+ *   5. None — AI features disabled, CLI still fully works
  *
  * Unified interface: provider.chat(systemPrompt, userPrompt, options) → string
  */
@@ -16,6 +17,7 @@
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
+const { spawnSync } = require('child_process');
 const logger = require('./logger');
 
 const CONFIG_PATH = path.join(os.homedir(), '.jira-cli', 'config.json');
@@ -27,7 +29,63 @@ function readConfig() {
   return {};
 }
 
-// ── Provider: Anthropic Claude ────────────────────────────────────────────────
+// ── Provider: Claude Code CLI (local, no API key) ─────────────────────────────
+
+/**
+ * Check whether the `claude` CLI binary is available in PATH.
+ */
+function isClaudeCodeAvailable() {
+  try {
+    const result = spawnSync('claude', ['--version'], {
+      timeout: 5000,
+      encoding: 'utf8',
+      stdio: 'pipe',
+    });
+    return result.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Create a provider that delegates to the local `claude` CLI.
+ * Uses `claude -p "<prompt>"` (print / non-interactive mode).
+ * No API key required — uses Claude Code's own auth.
+ */
+function createClaudeCodeProvider() {
+  return {
+    name: 'Claude Code (local)',
+    type: 'claude-code',
+    model: 'claude (local CLI)',
+    local: true,
+
+    async chat(systemPrompt, userPrompt /*, options */) {
+      // Combine system + user prompts into one message for the CLI
+      const fullPrompt = `${systemPrompt}\n\n${userPrompt}`;
+
+      const result = spawnSync('claude', ['-p', fullPrompt], {
+        timeout: 60000,       // 60s — model can take a moment
+        encoding: 'utf8',
+        maxBuffer: 1024 * 1024,
+        stdio: 'pipe',
+      });
+
+      if (result.error) {
+        throw new Error(`claude CLI error: ${result.error.message}`);
+      }
+      if (result.status !== 0) {
+        const stderr = (result.stderr || '').trim();
+        throw new Error(`claude CLI exited with code ${result.status}${stderr ? ': ' + stderr : ''}`);
+      }
+
+      const output = (result.stdout || '').trim();
+      if (!output) throw new Error('claude CLI returned empty response');
+      return output;
+    },
+  };
+}
+
+// ── Provider: Anthropic Claude API ────────────────────────────────────────────
 
 function createClaudeProvider(apiKey, model) {
   const Anthropic = require('@anthropic-ai/sdk');
@@ -38,6 +96,7 @@ function createClaudeProvider(apiKey, model) {
     name: 'Anthropic Claude',
     type: 'claude',
     model: resolvedModel,
+    local: false,
 
     async chat(systemPrompt, userPrompt, options = {}) {
       const response = await client.messages.create({
@@ -62,6 +121,7 @@ function createOpenAIProvider(apiKey, model) {
     name: 'OpenAI (Codex)',
     type: 'openai',
     model: resolvedModel,
+    local: false,
 
     async chat(systemPrompt, userPrompt, options = {}) {
       const response = await client.chat.completions.create({
@@ -79,19 +139,28 @@ function createOpenAIProvider(apiKey, model) {
   };
 }
 
-// ── Detect available providers ────────────────────────────────────────────────
+// ── Detect available providers ─────────────────────────────────────────────────
 
 /**
- * Detect which providers are configured on this machine.
- * Returns an array ordered by preference.
- *
- * @returns {Array<{ name, type, model, available }>}
+ * Detect which providers are available on this machine.
+ * Returns an array ordered by auto-detection priority.
  */
 function detectProviders() {
   const config = readConfig();
   const available = [];
 
-  // Check Claude
+  // 1. Claude Code CLI (local — no API key needed)
+  if (isClaudeCodeAvailable()) {
+    available.push({
+      name: 'Claude Code (local)',
+      type: 'claude-code',
+      model: 'claude (local CLI)',
+      local: true,
+      available: true,
+    });
+  }
+
+  // 2. Anthropic Claude API
   const anthropicKey = config.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY;
   if (anthropicKey) {
     try {
@@ -100,20 +169,22 @@ function detectProviders() {
         name: 'Anthropic Claude',
         type: 'claude',
         model: config.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001',
+        local: false,
         available: true,
       });
     } catch {
-      // SDK not installed — silently skip
+      // SDK not installed — skip
     }
   }
 
-  // Check OpenAI / Codex
+  // 3. OpenAI / Codex
   const openaiKey = config.OPENAI_API_KEY || process.env.OPENAI_API_KEY;
   if (openaiKey) {
     available.push({
       name: 'OpenAI (Codex)',
       type: 'openai',
       model: config.OPENAI_MODEL || 'gpt-4o-mini',
+      local: false,
       available: true,
     });
   }
@@ -124,42 +195,54 @@ function detectProviders() {
 // ── Get active provider ────────────────────────────────────────────────────────
 
 /**
- * Get the active AI provider client based on config + availability.
- * Returns null if neither is configured.
- *
- * @returns {object|null}
+ * Get the active AI provider based on config + availability.
+ * Priority: preferred config → Claude Code CLI → Anthropic → OpenAI → null
  */
 function getProvider() {
   const config = readConfig();
-  const preferred = config.AI_PROVIDER; // 'claude' | 'openai'
+  const preferred = config.AI_PROVIDER; // 'claude-code' | 'claude' | 'openai'
 
   const anthropicKey = config.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY;
-  const openaiKey = config.OPENAI_API_KEY || process.env.OPENAI_API_KEY;
+  const openaiKey    = config.OPENAI_API_KEY    || process.env.OPENAI_API_KEY;
 
-  // If user has set a preferred provider, try that first
+  // ── Honour explicit preference ─────────────────────────────────────────────
+  if (preferred === 'claude-code') {
+    if (isClaudeCodeAvailable()) {
+      logger.debug('AI provider: Claude Code CLI (preferred)');
+      return createClaudeCodeProvider();
+    }
+    logger.warn('AI_PROVIDER=claude-code but `claude` binary not found in PATH');
+  }
+
   if (preferred === 'claude' && anthropicKey) {
     try {
       require('@anthropic-ai/sdk');
-      logger.debug('AI provider: Anthropic Claude');
+      logger.debug('AI provider: Anthropic Claude (preferred)');
       return createClaudeProvider(anthropicKey, config.ANTHROPIC_MODEL);
     } catch {
-      logger.warn('ANTHROPIC_API_KEY set but @anthropic-ai/sdk not installed. Run: npm install -g @anthropic-ai/sdk');
+      logger.warn('ANTHROPIC_API_KEY set but @anthropic-ai/sdk not installed');
     }
   }
 
   if (preferred === 'openai' && openaiKey) {
-    logger.debug('AI provider: OpenAI (Codex)');
+    logger.debug('AI provider: OpenAI (preferred)');
     return createOpenAIProvider(openaiKey, config.OPENAI_MODEL);
   }
 
-  // Auto-detect: Claude first, then OpenAI
+  // ── Auto-detect ────────────────────────────────────────────────────────────
+  // Claude Code first — no API key needed, works out of the box
+  if (isClaudeCodeAvailable()) {
+    logger.debug('AI provider: Claude Code CLI (auto-detected)');
+    return createClaudeCodeProvider();
+  }
+
   if (anthropicKey) {
     try {
       require('@anthropic-ai/sdk');
       logger.debug('AI provider: Anthropic Claude (auto-detected)');
       return createClaudeProvider(anthropicKey, config.ANTHROPIC_MODEL);
     } catch {
-      // SDK not installed, fall through to OpenAI
+      // SDK not installed, fall through
     }
   }
 
@@ -168,8 +251,8 @@ function getProvider() {
     return createOpenAIProvider(openaiKey, config.OPENAI_MODEL);
   }
 
-  logger.debug('No AI provider configured');
+  logger.debug('No AI provider available');
   return null;
 }
 
-module.exports = { getProvider, detectProviders };
+module.exports = { getProvider, detectProviders, isClaudeCodeAvailable };
