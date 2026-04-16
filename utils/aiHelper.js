@@ -193,12 +193,23 @@ function buildFallbackJQL(naturalQuery, projectKey) {
 // ── 2. Convert Plain English to JQL ──────────────────────────────────────────
 
 async function convertToJQL(naturalQuery, projectKey) {
+  // Extract result-count hints from the natural query before doing anything else.
+  // e.g. "show 100 tickets", "last 50 bugs", "top 10 blockers"
+  // This works for both the AI path and the smart-fallback path.
+  let suggestedLimit;
+  const countMatch = naturalQuery.match(/\b(?:show|get|fetch|list|top|last|first)?\s*(\d+)\s*(?:tickets?|issues?|results?|bugs?|tasks?|stories?)?\b/i);
+  if (countMatch) {
+    const n = parseInt(countMatch[1], 10);
+    if (n >= 1 && n <= 500) suggestedLimit = n;  // sanity bounds
+  }
+
   // Build smart fallback first (better than raw text search)
   const smartJQL = buildFallbackJQL(naturalQuery, projectKey);
   const fallback = {
     jql: smartJQL,
     aiUsed: false,
     provider: null,
+    suggestedLimit,
   };
 
   const provider = await getProvider();
@@ -207,7 +218,8 @@ async function convertToJQL(naturalQuery, projectKey) {
   const today = new Date().toISOString().split('T')[0];
 
   const systemPrompt = `You are a Jira Query Language (JQL) expert.
-Return ONLY the JQL string. No explanation, no markdown, no quotes around it.`;
+Return ONLY the JQL string. No explanation, no markdown, no quotes around it.
+IMPORTANT: JQL does NOT support LIMIT or any result-count clause. Never include LIMIT in the output.`;
 
   const userPrompt = `Convert this natural language query to valid JQL.
 
@@ -222,12 +234,18 @@ Rules:
 - "bugs" = issuetype = Bug
 - "in progress" = status = "In Progress"
 - "high priority" = priority in (High, Blocker)
-- Always end with ORDER BY updated DESC unless specified otherwise`;
+- Always end with ORDER BY updated DESC unless specified otherwise
+- NEVER add LIMIT — result count is controlled separately, not in JQL`;
 
   try {
-    const jql = await provider.chat(systemPrompt, userPrompt, { temperature: 0.1, maxTokens: 200 });
+    let jql = await provider.chat(systemPrompt, userPrompt, { temperature: 0.1, maxTokens: 200 });
     if (!jql || jql.length < 5) throw new Error('Invalid JQL returned');
-    return { jql: jql.trim(), aiUsed: true, provider: provider.name };
+    jql = jql.trim();
+
+    // Safety net: strip any LIMIT clause the AI may have hallucinated despite instructions
+    jql = jql.replace(/\s+LIMIT\s+\d+\s*$/i, '').trim();
+
+    return { jql, aiUsed: true, provider: provider.name, suggestedLimit };
   } catch (err) {
     logger.warn(`JQL conversion failed (${provider.name}): ${err.message} — using fallback`);
     return { ...fallback, reason: 'api_error', errorMsg: err.message };

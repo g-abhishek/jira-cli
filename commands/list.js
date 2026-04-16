@@ -107,6 +107,8 @@ module.exports = {
         spinner.stop();
 
         jql = result.jql;
+        // If the AI extracted a count (e.g. "show 100 tickets"), use it as maxResults
+        if (result.suggestedLimit) argv.limit = result.suggestedLimit;
         if (!argv.json) {
           if (result.aiUsed) {
             console.log(`${chalk.cyan('[AI]')} JQL: ${chalk.dim(jql)}\n`);
