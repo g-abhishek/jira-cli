@@ -99,8 +99,9 @@ module.exports = {
       if (argv.fields) {
         const projectKey = f.project?.key;
         const synced = projectKey ? cache.get(`${projectKey}:fields`) : null;
-        const customFields   = synced?.customFields   || {};  // fieldLabel → [values]
-        const customFieldIds = synced?.customFieldIds || {};  // fieldLabel → fieldId
+        const customFields    = synced?.customFields   || {};  // fieldLabel → [values]
+        const customFieldIds  = synced?.customFieldIds || {};  // fieldLabel → fieldId
+        const customFieldMeta = synced?.customFieldMeta || {}; // fieldLabel → { type, items, custom }
         const priorities     = synced?.priorities || ['Blocker', 'High', 'Medium', 'Low', 'Minor'];
 
         // Core field prompts
@@ -114,10 +115,21 @@ module.exports = {
           },
         ];
 
+        const arrayFields = [];
+        const nonArrayPrompts = [...corePrompts];
+
         // Append one prompt per synced custom dropdown field
-        const customPrompts = Object.entries(customFields).map(([label, values]) =>
-          autoList(`_cf_${label}`, `Update ${label}?`, ['(keep)', ...values])
-        );
+        Object.entries(customFields).forEach(([label, values]) => {
+          const meta = customFieldMeta[label] || {};
+          const isArray = meta.type === 'array';
+
+          if (isArray) {
+            arrayFields.push({ label, values });
+            return;
+          }
+
+          nonArrayPrompts.push(autoList(`_cf_${label}`, `Update ${label}?`, ['(keep)', ...values]));
+        });
 
         // Comment always last
         const commentPrompt = [{
@@ -126,17 +138,35 @@ module.exports = {
           message: 'Add a comment with this transition? (blank to skip):',
         }];
 
-        const fieldAnswers = await inquirer.prompt([...corePrompts, ...customPrompts, ...commentPrompt]);
+        const fieldAnswers = await inquirer.prompt([...nonArrayPrompts, ...commentPrompt]);
+
+        // Handle multi-select custom fields with filter + loop
+        for (const { label, values } of arrayFields) {
+          const selected = await promptMultiSelectWithFilter(`Update ${label}`, values, { allowEmpty: true });
+          if (Array.isArray(selected) && selected.length > 0) {
+            fieldAnswers[`_cf_${label}`] = selected;
+          }
+        }
 
         if (fieldAnswers._priority !== '(keep)') fieldUpdates.priority = { name: fieldAnswers._priority };
         if (fieldAnswers._storyPoints > 0) fieldUpdates.customfield_10026 = fieldAnswers._storyPoints;
 
         // Apply any custom field updates using their real Jira field IDs
         Object.entries(fieldAnswers).forEach(([key, value]) => {
-          if (key.startsWith('_cf_') && value !== '(keep)') {
+          if (key.startsWith('_cf_')) {
             const label = key.slice(4); // strip '_cf_'
-            if (customFieldIds[label]) {
-              fieldUpdates[customFieldIds[label]] = { value };
+            const fieldId = customFieldIds[label];
+            if (!fieldId) return;
+
+            const meta = customFieldMeta[label] || {};
+            const isArray = meta.type === 'array';
+
+            if (isArray) {
+              if (Array.isArray(value) && value.length > 0) {
+                fieldUpdates[fieldId] = value.map((v) => ({ value: v }));
+              }
+            } else if (value !== '(keep)') {
+              fieldUpdates[fieldId] = { value };
             }
           }
         });
@@ -192,3 +222,73 @@ module.exports = {
     }
   },
 };
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Multi-select with filter + repeat.
+ * Returns array of selected values, or [] if user keeps existing.
+ */
+async function promptMultiSelectWithFilter(label, choices, { allowEmpty = true } = {}) {
+  const { shouldUpdate } = await inquirer.prompt([
+    {
+      type: 'confirm',
+      name: 'shouldUpdate',
+      message: `${label}?`,
+      default: false,
+    },
+  ]);
+
+  if (!shouldUpdate) return [];
+
+  const selected = new Set();
+  let addMore = true;
+
+  while (addMore) {
+    const { filter } = await inquirer.prompt([
+      {
+        type: 'input',
+        name: 'filter',
+        message: `Filter ${label.toLowerCase()} (type to narrow, blank for all):`,
+        default: '',
+      },
+    ]);
+
+    const query = (filter || '').toLowerCase().trim();
+    const filtered = query
+      ? choices.filter((v) => v.toLowerCase().includes(query))
+      : choices;
+
+    if (filtered.length === 0) {
+      console.log(chalk.yellow(`\n  No ${label.toLowerCase()} matched that filter.\n`));
+    } else {
+      const { picks } = await inquirer.prompt([
+        {
+          type: 'checkbox',
+          name: 'picks',
+          message: `${label} (space to select):`,
+          choices: filtered.slice(0, 30), // cap for UX
+          pageSize: 10,
+        },
+      ]);
+      picks.forEach((v) => selected.add(v));
+    }
+
+    const { more } = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'more',
+        message: `Add more ${label.toLowerCase()}?`,
+        default: false,
+      },
+    ]);
+    addMore = more;
+  }
+
+  const result = Array.from(selected);
+  if (!allowEmpty && result.length === 0) {
+    console.log(chalk.yellow(`\n  Please select at least one.\n`));
+    return promptMultiSelectWithFilter(label, choices, { allowEmpty });
+  }
+  return result;
+}

@@ -23,11 +23,10 @@ const chalk = require('chalk');
 const ora = require('ora');
 const inquirer = require('inquirer');
 const { autoList } = require('../utils/prompts');
-const { createIssue, getIssueTypes } = require('../services/jiraService');
+const { createIssue } = require('../services/jiraService');
 const { resolveProjectKeyInteractive } = require('../utils/projectResolver');
-const { enhanceTicket, generateFromGit, getDescriptionTemplate } = require('../utils/aiHelper');
+const { enhanceTicket, generateFromGit, extractPlainText } = require('../utils/aiHelper');
 const { printError } = require('../utils/errorParser');
-const { validate, CreateIssueSchema } = require('../validators/schema');
 const cache = require('../utils/cache');
 const { requireSyncedData, requireSyncedField } = require('../utils/requireSync');
 const gitHelper = require('../utils/gitHelper');
@@ -40,7 +39,8 @@ module.exports = {
     yargs
       .option('from-git', { type: 'boolean', default: false, desc: 'Generate from recent git commits' })
       .option('type', { alias: 't', type: 'string', desc: 'Pre-select issue type' })
-      .option('dry-run', { type: 'boolean', default: false, desc: 'Show payload without creating' }),
+      .option('dry-run', { type: 'boolean', default: false, desc: 'Show payload without creating' })
+      .option('all-fields', { type: 'boolean', default: false, desc: 'Prompt for all optional custom fields' }),
 
   handler: async (argv) => {
     try {
@@ -62,6 +62,8 @@ module.exports = {
       // Works for any Jira project — no hardcoded field IDs
       const customFields    = synced.customFields    || {};  // { fieldLabel: [values] }
       const customFieldIds  = synced.customFieldIds  || {};  // { fieldLabel: "customfield_XXXXX" }
+      const customFieldMeta = synced.customFieldMeta || {};  // { fieldLabel: { type, items, custom } }
+      const requiredFields  = synced.requiredFields || {};  // { fieldLabel: { id, type, items, required } }
 
       console.log(chalk.bold(`\n✨ Create a new ticket in ${chalk.cyan(projectKey)}\n`));
 
@@ -77,6 +79,7 @@ module.exports = {
       // ── Step 2: From Git (AI mode) ───────────────────────────────────────────
       let summary = '';
       let description = '';
+      let descriptionProvided = false;
 
       if (argv['from-git']) {
         if (!gitHelper.isGitRepo()) {
@@ -131,16 +134,16 @@ module.exports = {
       }
 
       if (!description) {
-        const template = getDescriptionTemplate(issueType);
         const ans = await inquirer.prompt([
           {
             type: 'editor',
             name: 'description',
-            message: 'Description (editor will open):',
-            default: template,
+            message: 'Description (optional, editor will open):',
+            default: '',
           },
         ]);
         description = ans.description;
+        descriptionProvided = !!description && description.trim().length > 0;
       }
 
       // ── Step 4: Core Fields ──────────────────────────────────────────────────
@@ -166,18 +169,81 @@ module.exports = {
       // any Jira workspace — no hardcoded field IDs.
       const customFieldAnswers = {};  // fieldId → { value: "..." }
 
-      if (Object.keys(customFields).length > 0) {
-        const customPrompts = Object.entries(customFields).map(([label, values]) =>
-          autoList(label, `${label}:`, ['(skip)', ...values])
-        );
+      const customFieldEntries = Object.entries(customFields);
+      const fieldsToPrompt = argv['all-fields']
+        ? customFieldEntries
+        : customFieldEntries.filter(([label]) => requiredFields[label]);
 
-        const rawCustomAnswers = await inquirer.prompt(customPrompts);
+      if (fieldsToPrompt.length > 0) {
+        const rawCustomAnswers = {};
+        const nonArrayPrompts = [];
+
+        for (const [label, values] of fieldsToPrompt) {
+          const meta = customFieldMeta[label] || {};
+          const isRequired = !!requiredFields[label];
+          const isArray = meta.type === 'array';
+
+          if (isArray) {
+            const selected = await promptMultiSelectWithFilter(label, values, { required: isRequired });
+            if (selected.length > 0) rawCustomAnswers[label] = selected;
+          } else {
+            nonArrayPrompts.push(
+              autoList(
+                label,
+                `${label}${isRequired ? ' (required)' : ''}:`,
+                isRequired ? values : ['(skip)', ...values]
+              )
+            );
+          }
+        }
+
+        if (nonArrayPrompts.length > 0) {
+          const answers = await inquirer.prompt(nonArrayPrompts);
+          Object.assign(rawCustomAnswers, answers);
+        }
 
         // Map label answers back to their Jira field IDs for payload
         Object.entries(rawCustomAnswers).forEach(([label, value]) => {
-          if (value !== '(skip)' && customFieldIds[label]) {
-            customFieldAnswers[customFieldIds[label]] = { value };
+          const fieldId = customFieldIds[label];
+          if (!fieldId) return;
+
+          const meta = customFieldMeta[label] || {};
+          const isArray = meta.type === 'array';
+
+          if (isArray) {
+            if (Array.isArray(value) && value.length > 0) {
+              customFieldAnswers[fieldId] = value.map((v) => ({ value: v }));
+            }
+            return;
           }
+
+          if (value !== '(skip)') {
+            customFieldAnswers[fieldId] = { value };
+          }
+        });
+      }
+
+      // ── Step 5b: Required custom text fields (e.g., Steps to Reproduce) ─────
+      const requiredTextFields = Object.entries(requiredFields)
+        .filter(([label, meta]) => meta?.id?.startsWith('customfield_'))
+        .filter(([label, meta]) => !customFields[label]); // not an option field
+
+      if (requiredTextFields.length > 0) {
+        const textPrompts = requiredTextFields.map(([label, meta]) => ({
+          type: meta.type === 'string' ? 'input' : 'editor',
+          name: label,
+          message: `${label} (required):`,
+          validate: (v) => (v && v.trim().length > 0) || 'This field is required',
+        }));
+
+        const textAnswers = await inquirer.prompt(textPrompts);
+        Object.entries(textAnswers).forEach(([label, value]) => {
+          const id = requiredFields[label]?.id;
+          if (!id || !value || !value.trim()) return;
+
+          const meta = requiredFields[label] || {};
+          const needsADF = typeof meta.custom === 'string' && meta.custom.includes('textarea');
+          customFieldAnswers[id] = needsADF ? buildADF(value.trim()) : value.trim();
         });
       }
 
@@ -185,36 +251,32 @@ module.exports = {
       let selectedVersions = [];
       let selectedComponents = [];
 
+      const fixVersionsRequired =
+        !!requiredFields['Fix Versions'] || !!requiredFields['Fix versions'] || !!requiredFields['fixVersions'];
+
       if (fixVersions.length > 0) {
-        const verAns = await inquirer.prompt([
-          {
-            type: 'checkbox',
-            name: 'fixVersions',
-            message: 'Fix Versions (space to select):',
-            choices: fixVersions.slice(0, 30), // cap for UX
-            pageSize: 10,
-          },
-        ]);
-        selectedVersions = verAns.fixVersions;
+        selectedVersions = await promptMultiSelectWithFilter('Fix Versions', fixVersions, { required: fixVersionsRequired });
+        if (fixVersionsRequired && selectedVersions.length === 0) {
+          throw new Error('Fix Versions is required but none were selected. Please choose at least one.');
+        }
       }
 
+      const componentsRequired = !!requiredFields.Components;
       if (components.length > 0) {
-        const compAns = await inquirer.prompt([
-          {
-            type: 'checkbox',
-            name: 'components',
-            message: 'Components:',
-            choices: components,
-            pageSize: 10,
-          },
-        ]);
-        selectedComponents = compAns.components;
+        selectedComponents = await promptMultiSelectWithFilter('Components', components, { required: componentsRequired });
+      } else if (componentsRequired) {
+        throw new Error('Components is required but no components are available in sync data. Run `jira sync --force`.');
       }
 
       // ── Step 7: AI Enhancement ────────────────────────────────────────────────
       const aiSpinner = ora('Enhancing with AI...').start();
       const enhanced = await enhanceTicket({ summary, description, issueType });
       aiSpinner.stop();
+
+      // If user left description blank, keep it blank (don't inject templates)
+      if (!descriptionProvided) {
+        enhanced.description = '';
+      }
 
       if (enhanced.aiUsed) {
         console.log(chalk.cyan('\n✨ AI enhanced your ticket:'));
@@ -232,7 +294,13 @@ module.exports = {
       Object.entries(customFieldAnswers).forEach(([fieldId, val]) => {
         // Look up the label for display
         const label = Object.keys(customFieldIds).find((l) => customFieldIds[l] === fieldId) || fieldId;
-        console.log(`  ${chalk.dim(label.slice(0, 10).padEnd(10))} ${val.value}`);
+        const display =
+          Array.isArray(val)
+            ? val.map((v) => v.value || v.name || v).join(', ')
+            : (val && typeof val === 'object' && val.type === 'doc')
+              ? extractPlainText(val).slice(0, 80)
+              : (val && typeof val === 'object' && val.value) ? val.value : String(val);
+        console.log(`  ${chalk.dim(label.slice(0, 10).padEnd(10))} ${display}`);
       });
       console.log(chalk.bold('─────────────────────────────────────────────────\n'));
 
@@ -311,7 +379,7 @@ function buildADF(text) {
   return {
     type: 'doc',
     version: 1,
-    content: paragraphs.filter((p) => p.content.length > 0 || true),
+    content: paragraphs,
   };
 }
 
@@ -325,4 +393,61 @@ function getBaseUrl() {
     if (fs.existsSync(configPath)) fileConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   } catch {}
   return { baseUrl: (fileConfig.JIRA_BASE_URL || process.env.JIRA_BASE_URL || '').replace(/\/$/, '') };
+}
+
+/**
+ * Multi-select with filter + repeat.
+ * Returns array of selected values.
+ */
+async function promptMultiSelectWithFilter(label, choices, { required = false } = {}) {
+  const selected = new Set();
+  let addMore = true;
+
+  while (addMore) {
+    const { filter } = await inquirer.prompt([
+      {
+        type: 'input',
+        name: 'filter',
+        message: `Filter ${label} (type to narrow, blank for all):`,
+        default: '',
+      },
+    ]);
+
+    const query = (filter || '').toLowerCase().trim();
+    const filtered = query
+      ? choices.filter((v) => v.toLowerCase().includes(query))
+      : choices;
+
+    if (filtered.length === 0) {
+      console.log(chalk.yellow(`\n  No ${label.toLowerCase()} matched that filter.\n`));
+    } else {
+      const { picks } = await inquirer.prompt([
+        {
+          type: 'checkbox',
+          name: 'picks',
+          message: `${label} (space to select):`,
+          choices: filtered.slice(0, 30), // cap for UX
+          pageSize: 10,
+        },
+      ]);
+      picks.forEach((v) => selected.add(v));
+    }
+
+    const { more } = await inquirer.prompt([
+      {
+        type: 'confirm',
+        name: 'more',
+        message: `Add more ${label.toLowerCase()}?`,
+        default: false,
+      },
+    ]);
+    addMore = more;
+  }
+
+  const result = Array.from(selected);
+  if (required && result.length === 0) {
+    console.log(chalk.yellow(`\n  ${label} is required. Please select at least one.\n`));
+    return promptMultiSelectWithFilter(label, choices, { required });
+  }
+  return result;
 }

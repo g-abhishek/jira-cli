@@ -81,10 +81,12 @@ Create a ticket interactively with prompts.
 jira create                        # Step-by-step prompts
 jira create --type Bug             # Skip the issue type prompt
 jira create --from-git             # AI generates ticket from recent git commits
+jira create --all-fields           # Prompt for all optional custom fields
 jira create --dry-run              # Preview the payload without creating
 ```
 
 The prompts cover: issue type, summary, description, priority, story points, due date, fix versions, components, and any custom dropdown fields synced from your project.
+Description is free text and optional. If left blank, no AI description is generated.
 
 ---
 
@@ -273,6 +275,8 @@ You don't need to pass `--project` every time. The CLI finds your project key in
 ## Custom Fields
 
 `jira sync` automatically discovers all dropdown fields in your project (e.g. Cluster, Channel, Work Type, Environment, Severity — whatever your project has). These appear as prompts during `jira create` and `jira update --fields` with no configuration needed.
+
+If Jira marks any fields as required (including custom text fields like “Steps to Reproduce” or system fields like Components), `jira create` will enforce them and prevent skipping.
 
 ---
 

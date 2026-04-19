@@ -110,11 +110,24 @@ module.exports = {
         if (meta) {
           // Dynamically discover ALL custom fields that have allowed values.
           // This works for any Jira project — no hardcoded field IDs needed.
-          const customFields = {};    // fieldLabel → [option, ...]
-          const customFieldIds = {};  // fieldLabel → customfield_XXXXX
+          const customFields = {};     // fieldLabel → [option, ...]
+          const customFieldIds = {};   // fieldLabel → customfield_XXXXX
+          const customFieldMeta = {};  // fieldLabel → { type, items, custom }
+          const requiredFields = {};   // fieldLabel → { id, type, items, custom, required }
 
           meta.issuetypes?.forEach((issueType) => {
             Object.entries(issueType.fields || {}).forEach(([fieldId, fieldMeta]) => {
+              // Track required fields (including system fields like components)
+              if (fieldMeta?.required && fieldMeta?.name && !requiredFields[fieldMeta.name]) {
+                requiredFields[fieldMeta.name] = {
+                  id: fieldId,
+                  type: fieldMeta.schema?.type || null,
+                  items: fieldMeta.schema?.items || null,
+                  custom: fieldMeta.schema?.custom || null,
+                  required: true,
+                };
+              }
+
               if (
                 fieldId.startsWith('customfield_') &&
                 fieldMeta.allowedValues?.length > 0 &&
@@ -127,6 +140,11 @@ module.exports = {
                 if (values.length > 0) {
                   customFields[fieldMeta.name] = values;
                   customFieldIds[fieldMeta.name] = fieldId;
+                  customFieldMeta[fieldMeta.name] = {
+                    type: fieldMeta.schema?.type || null,
+                    items: fieldMeta.schema?.items || null,
+                    custom: fieldMeta.schema?.custom || null,
+                  };
                 }
               }
             });
@@ -134,6 +152,8 @@ module.exports = {
 
           results.customFields = customFields;
           results.customFieldIds = customFieldIds;
+          results.customFieldMeta = customFieldMeta;
+          results.requiredFields = requiredFields;
 
           // Statuses (used by `jira search --interactive`)
           results.statuses = [...new Set(
@@ -221,9 +241,13 @@ module.exports = {
       // ── Summary ───────────────────────────────────────────────────────────
       console.log(chalk.bold(`\n✅ Sync complete for ${chalk.cyan(projectKey)}`));
       console.log(chalk.dim(`   Issue types    : ${(results.issueTypes || []).join(', ')}`));
-      console.log(chalk.dim(`   Fix versions   : ${(results.fixVersions || []).length}`));
-      console.log(chalk.dim(`   Components     : ${(results.components || []).length}`));
-      console.log(chalk.dim(`   Custom fields  : ${Object.keys(results.customFields || {}).length} dropdown(s)`));
+      const fixCount = (results.fixVersions || []).length;
+      const compCount = (results.components || []).length;
+      const customCount = Object.keys(results.customFields || {}).length;
+
+      console.log(chalk.dim(`   Fix versions   : ${fixCount}${fixCount === 0 ? ' (not configured in this project)' : ''}`));
+      console.log(chalk.dim(`   Components     : ${compCount}${compCount === 0 ? ' (not configured in this project)' : ''}`));
+      console.log(chalk.dim(`   Custom fields  : ${customCount} dropdown(s)${customCount === 0 ? ' (none discovered)' : ''}`));
       if (Object.keys(results.customFields || {}).length > 0) {
         console.log(chalk.dim(`     → ${Object.keys(results.customFields).join(', ')}`));
       }

@@ -129,6 +129,8 @@ Cache keys follow the pattern: `{PROJECT_KEY}:{data_type}`
 | `{KEY}:fields` → `priorities` | priorities API | `create`, `update` |
 | `{KEY}:fields` → `customFields` | createMeta API — all custom option fields | `create`, `update --fields` |
 | `{KEY}:fields` → `customFieldIds` | createMeta API — maps label → fieldId | `create`, `update --fields` |
+| `{KEY}:fields` → `customFieldMeta` | createMeta API — field schema metadata | `create` |
+| `{KEY}:fields` → `requiredFields` | createMeta API — required field metadata | `create` |
 | `{KEY}:fields` → `statuses` | createMeta API | `search --interactive` |
 | `{KEY}:fields` → `activeSprints` | Agile boards API | `dashboard` |
 | `{KEY}:sync_meta` | set by sync itself | staleness check |

@@ -139,6 +139,7 @@ jira sync
 This fetches and caches:
 - Fix versions, components, issue types
 - Custom dropdown fields (dynamically discovered — Cluster, Channel, Work Type, or whatever your project has)
+- Required fields metadata (so `jira create` enforces required custom fields and Components)
 - Active sprint information
 - Available transitions
 
@@ -228,8 +229,11 @@ Create a ticket interactively with AI enhancement.
 jira create
 jira create --type Bug
 jira create --from-git           # Generate from recent git commits
+jira create --all-fields         # Prompt for all optional custom fields
 jira create --dry-run            # Preview without creating
 ```
+
+Description is free text and optional. If left blank, no AI description is generated.
 
 ### `jira update <KEY>`
 Transition a ticket. Shows only valid next states (workflow-aware).
