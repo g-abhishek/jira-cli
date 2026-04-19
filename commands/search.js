@@ -187,10 +187,7 @@ module.exports = {
       }
 
       const spinner = ora(`Searching ${projectKey}...`).start();
-      const result = await searchIssues(jql, {
-        maxResults: argv.limit,
-        nextPageToken: argv.page > 0 ? String(argv.page * argv.limit) : undefined,
-      });
+      const result = await fetchPageByNumber(jql, argv.page, argv.limit);
       spinner.stop();
 
       if (argv.json) {
@@ -254,11 +251,10 @@ module.exports = {
       });
 
       // ── Pagination ───────────────────────────────────────────────────────────
-      if (total > argv.limit) {
+      if (result.nextPageToken) {
         const remaining = total - (argv.page + 1) * argv.limit;
-        if (remaining > 0) {
-          console.log(chalk.dim(`\n  ${remaining} more — use --page ${argv.page + 1} for next page.\n`));
-        }
+        const suffix = Number.isFinite(remaining) && remaining > 0 ? `  ${remaining} more —` : '  More results —';
+        console.log(chalk.dim(`\n${suffix} use --page ${argv.page + 1} for next page.\n`));
       } else {
         console.log();
       }
@@ -271,3 +267,25 @@ module.exports = {
     }
   },
 };
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * /search/jql pagination uses opaque nextPageToken, so to reach page N
+ * we have to walk pages sequentially.
+ */
+async function fetchPageByNumber(jql, page, limit) {
+  let token;
+  let result = null;
+
+  for (let i = 0; i <= page; i++) {
+    result = await searchIssues(jql, {
+      maxResults: limit,
+      nextPageToken: token,
+    });
+    token = result.nextPageToken;
+    if (!token && i < page) break;
+  }
+
+  return result || { issues: [], total: 0 };
+}

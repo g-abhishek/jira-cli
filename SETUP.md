@@ -206,7 +206,7 @@ jira list
 jira list --status "In Progress"
 jira list --type Bug
 jira list --filter "high priority bugs this sprint"   # AI-powered
-jira list --limit 50 --page 1
+jira list --limit 50 --page 1                 # Paginate (0-indexed pages; higher pages may be slower)
 jira list --json | jq '.[].key'                       # Pipe to jq
 ```
 
@@ -218,6 +218,7 @@ jira search --status "SIT" --type Bug
 jira search --assignee "John"
 jira search --filter "unassigned tasks due this week"
 jira search --interactive                              # Arrow-key filter builder
+jira search --limit 50 --page 1                        # Paginate (0-indexed pages; higher pages may be slower)
 ```
 
 ### `jira create`

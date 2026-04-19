@@ -48,6 +48,9 @@ These specific versions are pinned because newer versions dropped CommonJS suppo
 Always use **REST API v3** (`/rest/api/3/`). Never use v2 or latest.
 Exception: Agile endpoints use `/rest/agile/1.0/`.
 
+**JQL search pagination:** Use `/rest/api/3/search/jql` with opaque `nextPageToken`.
+If you need numeric pages, you must walk tokens sequentially.
+
 ### 4. Auth Method
 Always use **Basic Auth** with `email:api_token` base64 encoding.
 Never use OAuth, session tokens, or other auth methods.

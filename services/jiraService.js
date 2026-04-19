@@ -140,13 +140,14 @@ async function deleteIssue(key) {
 
 /**
  * Search issues using JQL.
+ * Uses /rest/api/3/search/jql (nextPageToken-based pagination).
  * @param {string} jql - JQL query string
- * @param {Object} options - { startAt, maxResults, fields }
- * @returns {{ issues, total, startAt, maxResults }}
+ * @param {Object} options - { nextPageToken, maxResults, fields }
+ * @returns {{ issues, total, startAt, maxResults, nextPageToken }}
  */
 async function searchIssues(jql, options = {}) {
   const client = createClient();
-  // /search/jql (v3 replacement) uses nextPageToken for pagination, not startAt
+  // /search/jql uses opaque nextPageToken, not numeric offsets
   const body = {
     jql,
     maxResults: options.maxResults || 25,

@@ -106,7 +106,10 @@ module.exports = {
         const result = await convertToJQL(argv.filter, projectKey);
         spinner.stop();
 
-        jql = result.jql;
+        // Always restrict list to current user.
+        // If AI JQL already includes ORDER BY, strip it before appending ours.
+        const baseJql = result.jql.replace(/\s+ORDER\s+BY\s+[\s\S]*$/i, '').trim();
+        jql = `${baseJql} AND assignee = currentUser() ORDER BY updated DESC`;
         // If the AI extracted a count (e.g. "show 100 tickets"), use it as maxResults
         if (result.suggestedLimit) argv.limit = result.suggestedLimit;
         if (!argv.json) {
@@ -132,10 +135,7 @@ module.exports = {
       }
 
       const spinner = ora('Fetching your tickets...').start();
-      const result = await searchIssues(jql, {
-        maxResults: argv.limit,
-        nextPageToken: argv.page > 0 ? String(argv.page * argv.limit) : undefined,
-      });
+      const result = await fetchPageByNumber(jql, argv.page, argv.limit);
       spinner.stop();
 
       logger.info(`jira list: fetched ${result.issues?.length} issues`);
@@ -201,7 +201,9 @@ module.exports = {
 
       // ── Pagination ───────────────────────────────────────────────────────────
       if (result.nextPageToken) {
-        console.log(chalk.dim(`\n  More results — use --page ${argv.page + 1} to continue.\n`));
+        const remaining = total - (argv.page + 1) * argv.limit;
+        const suffix = Number.isFinite(remaining) && remaining > 0 ? `  ${remaining} more —` : '  More results —';
+        console.log(chalk.dim(`\n${suffix} use --page ${argv.page + 1} to continue.\n`));
       } else {
         console.log();
       }
@@ -213,3 +215,25 @@ module.exports = {
     }
   },
 };
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * /search/jql pagination uses opaque nextPageToken, so to reach page N
+ * we have to walk pages sequentially.
+ */
+async function fetchPageByNumber(jql, page, limit) {
+  let token;
+  let result = null;
+
+  for (let i = 0; i <= page; i++) {
+    result = await searchIssues(jql, {
+      maxResults: limit,
+      nextPageToken: token,
+    });
+    token = result.nextPageToken;
+    if (!token && i < page) break;
+  }
+
+  return result || { issues: [], total: 0 };
+}

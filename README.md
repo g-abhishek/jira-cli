@@ -58,7 +58,7 @@ jira list                          # Your open tickets
 jira list --filter "bugs this week"  # AI-powered plain English filter
 jira list --status "In Progress"   # Filter by status
 jira list --limit 20               # Show more results
-jira list --page 2                 # Paginate
+jira list --page 2                 # Paginate (0-indexed pages; higher pages may be slower)
 ```
 
 ---
@@ -130,6 +130,7 @@ Search all tickets in the project (not just yours).
 jira search --filter "open bugs assigned to me"    # AI → JQL
 jira search --interactive                          # Arrow-key filter builder
 jira search --jql "project = PROJ AND priority = High"  # Raw JQL
+jira search --limit 50 --page 1                    # Paginate (0-indexed pages; higher pages may be slower)
 ```
 
 ---
