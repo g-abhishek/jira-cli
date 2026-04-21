@@ -146,7 +146,7 @@ module.exports = {
       }
 
       const issues = result.issues || [];
-      const total  = result.total  || 0;
+      const total  = typeof result.total === 'number' ? result.total : issues.length;
 
       if (issues.length === 0) {
         console.log(chalk.dim('\nNo tickets found matching your criteria.\n'));
@@ -202,8 +202,12 @@ module.exports = {
       // ── Pagination ───────────────────────────────────────────────────────────
       if (result.nextPageToken) {
         const remaining = total - (argv.page + 1) * argv.limit;
-        const suffix = Number.isFinite(remaining) && remaining > 0 ? `  ${remaining} more —` : '  More results —';
-        console.log(chalk.dim(`\n${suffix} use --page ${argv.page + 1} to continue.\n`));
+        if (Number.isFinite(remaining) && remaining <= 0) {
+          console.log();
+        } else {
+          const suffix = Number.isFinite(remaining) ? `  ${remaining} more —` : '  More results —';
+          console.log(chalk.dim(`\n${suffix} use --page ${argv.page + 1} to continue.\n`));
+        }
       } else {
         console.log();
       }

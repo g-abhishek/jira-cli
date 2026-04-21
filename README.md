@@ -101,6 +101,8 @@ jira update PROJ-1234 --fields     # Also update priority, custom fields, add a 
 
 Only valid next states are shown (workflow-aware — no invalid jumps).
 
+`--fields` also lets you assign the ticket. The CLI remembers name → accountId mappings locally so future assignments can be done by name.
+
 ---
 
 ### `jira start <KEY>`
@@ -129,9 +131,10 @@ jira comment PROJ-1234 --list                        # Read existing comments
 Search all tickets in the project (not just yours).
 
 ```bash
-jira search --filter "open bugs assigned to me"    # AI → JQL
+jira search --filter "open bugs assigned to me"    # AI → JQL (assignee names resolved)
 jira search --interactive                          # Arrow-key filter builder
 jira search --jql "project = PROJ AND priority = High"  # Raw JQL
+jira search --assignee "John"                      # Name/email resolves via memory if known
 jira search --limit 50 --page 1                    # Paginate (0-indexed pages; higher pages may be slower)
 ```
 
@@ -221,6 +224,17 @@ View recent activity and errors.
 jira logs
 jira logs --tail 50                # Show last 50 lines
 jira logs --level error            # Errors only
+```
+
+---
+
+### `jira assignees`
+Manage local assignee memory (name → accountId).
+
+```bash
+jira assignees list
+jira assignees remove "Chintan Davda"
+jira assignees clear
 ```
 
 ---

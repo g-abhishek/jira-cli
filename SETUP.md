@@ -216,8 +216,8 @@ Search all tickets in the project (not just yours).
 
 ```bash
 jira search --status "SIT" --type Bug
-jira search --assignee "John"
-jira search --filter "unassigned tasks due this week"
+jira search --assignee "John"                          # Name/email resolves via memory if known
+jira search --filter "unassigned tasks due this week"   # assignee names resolved when present
 jira search --interactive                              # Arrow-key filter builder
 jira search --limit 50 --page 1                        # Paginate (0-indexed pages; higher pages may be slower)
 ```
@@ -243,6 +243,8 @@ jira update JCP-1234
 jira update JCP-1234 --status "In Progress"
 jira update JCP-1234 --fields   # Also update priority, story points, etc.
 ```
+
+`--fields` also lets you assign the ticket by name/email and remembers matches locally.
 
 ### `jira delete <KEY>`
 Delete a ticket. Requires typing the key to confirm.
@@ -342,6 +344,17 @@ jira logs
 jira logs --lines 100
 jira logs --level error
 jira logs --clear
+```
+
+---
+
+### `jira assignees`
+Manage local assignee memory (name → accountId).
+
+```bash
+jira assignees list
+jira assignees remove "Chintan Davda"
+jira assignees clear
 ```
 
 ---

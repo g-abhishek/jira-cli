@@ -78,6 +78,7 @@ yargs
   .command(require('./commands/doctor'))
   .command(require('./commands/logs'))
   .command(require('./commands/ask'))
+  .command(require('./commands/assignees'))
 
   // ── Global Options ───────────────────────────────────────────────────────────
   .option('verbose', {

@@ -27,6 +27,7 @@ const { printTable } = require('../utils/table');
 const cache = require('../utils/cache');
 const { requireSyncedData, requireSyncedField } = require('../utils/requireSync');
 const logger = require('../utils/logger');
+const { resolveAssignee, replaceAssigneeInJql } = require('../utils/assigneeResolver');
 
 // ── Status coloring ────────────────────────────────────────────────────────────
 
@@ -140,7 +141,12 @@ module.exports = {
         const conditions = [`project = ${projectKey}`];
         if (answers.assigneeMode === 'Me (currentUser)') conditions.push('assignee = currentUser()');
         if (answers.assigneeMode === 'Specific person' && answers.assigneeName) {
-          conditions.push(`assignee = "${answers.assigneeName}"`);
+          const resolved = await resolveAssignee(answers.assigneeName, projectKey);
+          if (resolved?.accountId) {
+            conditions.push(`assignee = "${resolved.accountId}"`);
+          } else {
+            conditions.push(`assignee = "${answers.assigneeName}"`);
+          }
         }
         if (answers.statuses.length > 0)
           conditions.push(`status in (${answers.statuses.map((s) => `"${s}"`).join(', ')})`);
@@ -155,6 +161,7 @@ module.exports = {
         const result = await convertToJQL(argv.filter, projectKey);
         spinner.stop();
         jql = result.jql;
+        jql = await replaceAssigneeInJql(jql, projectKey);
         // If the AI extracted a count (e.g. "show 100 tickets"), use it as maxResults
         if (result.suggestedLimit) argv.limit = result.suggestedLimit;
         if (!argv.json) {
@@ -174,11 +181,16 @@ module.exports = {
       } else {
         const conditions = [`project = ${projectKey}`];
         if (argv.assignee) {
-          conditions.push(
-            argv.assignee === 'me'
-              ? 'assignee = currentUser()'
-              : `assignee = "${argv.assignee}"`
-          );
+          if (argv.assignee === 'me') {
+            conditions.push('assignee = currentUser()');
+          } else {
+            const resolved = await resolveAssignee(argv.assignee, projectKey);
+            if (resolved?.accountId) {
+              conditions.push(`assignee = "${resolved.accountId}"`);
+            } else {
+              conditions.push(`assignee = "${argv.assignee}"`);
+            }
+          }
         }
         if (argv.status)   conditions.push(`status = "${argv.status}"`);
         if (argv.type)     conditions.push(`issuetype = "${argv.type}"`);
@@ -196,7 +208,7 @@ module.exports = {
       }
 
       const issues = result.issues || [];
-      const total  = result.total  || 0;
+      const total  = typeof result.total === 'number' ? result.total : issues.length;
 
       if (issues.length === 0) {
         console.log(chalk.dim('\nNo tickets found.\n'));
@@ -253,8 +265,12 @@ module.exports = {
       // ── Pagination ───────────────────────────────────────────────────────────
       if (result.nextPageToken) {
         const remaining = total - (argv.page + 1) * argv.limit;
-        const suffix = Number.isFinite(remaining) && remaining > 0 ? `  ${remaining} more —` : '  More results —';
-        console.log(chalk.dim(`\n${suffix} use --page ${argv.page + 1} for next page.\n`));
+        if (Number.isFinite(remaining) && remaining <= 0) {
+          console.log();
+        } else {
+          const suffix = Number.isFinite(remaining) ? `  ${remaining} more —` : '  More results —';
+          console.log(chalk.dim(`\n${suffix} use --page ${argv.page + 1} for next page.\n`));
+        }
       } else {
         console.log();
       }

@@ -84,6 +84,8 @@ jira-cli/
 
 **Key utilities:**
 - `utils/prompts.js → autoList()` — use instead of `type: 'list'` for any prompt with potentially long or dynamic choices. Provides live search filtering. Automatically pins `(keep)` / `(skip)` items at the top during search. Never use bare `type: 'list'` for dynamic/custom-field choices.
+- `utils/assigneeMemory.js` — local name → accountId memory for assignee prompts.
+- `utils/assigneeResolver.js` — shared resolver that uses memory + Jira user search.
 
 ---
 

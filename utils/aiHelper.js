@@ -136,6 +136,8 @@ Rules:
 function buildFallbackJQL(naturalQuery, projectKey) {
   const q = naturalQuery.toLowerCase();
   const conditions = [`project = ${projectKey}`];
+  const useCreated = /\bcreated\b/.test(q);
+  const dateField = useCreated ? 'created' : 'updated';
 
   // ── Date ranges ─────────────────────────────────────────────────────────────
   const lastNMonths = q.match(/last\s+(\d+)\s+months?/);
@@ -147,19 +149,19 @@ function buildFallbackJQL(naturalQuery, projectKey) {
 
   if (lastNMonths) {
     const n = parseInt(lastNMonths[1], 10);
-    conditions.push(`updated >= -${n * 30}d`);
+    conditions.push(`${dateField} >= -${n * 30}d`);
   } else if (lastNWeeks) {
     const n = parseInt(lastNWeeks[1], 10);
-    conditions.push(`updated >= -${n * 7}d`);
+    conditions.push(`${dateField} >= -${n * 7}d`);
   } else if (lastNDays) {
     const n = parseInt(lastNDays[1], 10);
-    conditions.push(`updated >= -${n}d`);
+    conditions.push(`${dateField} >= -${n}d`);
   } else if (thisWeek) {
-    conditions.push('updated >= startOfWeek()');
+    conditions.push(`${dateField} >= startOfWeek()`);
   } else if (thisMonth) {
-    conditions.push('updated >= startOfMonth()');
+    conditions.push(`${dateField} >= startOfMonth()`);
   } else if (today) {
-    conditions.push('updated >= startOfDay()');
+    conditions.push(`${dateField} >= startOfDay()`);
   }
 
   // ── Assignee ────────────────────────────────────────────────────────────────
@@ -197,8 +199,14 @@ async function convertToJQL(naturalQuery, projectKey) {
   // e.g. "show 100 tickets", "last 50 bugs", "top 10 blockers"
   // This works for both the AI path and the smart-fallback path.
   let suggestedLimit;
-  const countMatch = naturalQuery.match(/\b(?:show|get|fetch|list|top|last|first)?\s*(\d+)\s*(?:tickets?|issues?|results?|bugs?|tasks?|stories?)?\b/i);
-  if (countMatch) {
+  const hasDateRange = /\b(?:last|past)\s+\d+\s+(?:day|days|week|weeks|month|months|year|years)\b/i.test(naturalQuery);
+  const explicitLimitMatch = naturalQuery.match(/\b(?:only|give|show|get|fetch|list|top|first)\s+(\d+)\s*(?:results?|tickets?|issues?|bugs?|tasks?|stories?)\b/i);
+  const countMatch = naturalQuery.match(/\b(?:show|get|fetch|list|top|first)\s+(\d+)\s*(?:tickets?|issues?|results?|bugs?|tasks?|stories?)?\b/i);
+
+  if (explicitLimitMatch) {
+    const n = parseInt(explicitLimitMatch[1], 10);
+    if (n >= 1 && n <= 500) suggestedLimit = n;
+  } else if (countMatch && !hasDateRange) {
     const n = parseInt(countMatch[1], 10);
     if (n >= 1 && n <= 500) suggestedLimit = n;  // sanity bounds
   }
@@ -218,7 +226,10 @@ async function convertToJQL(naturalQuery, projectKey) {
   const today = new Date().toISOString().split('T')[0];
 
   const systemPrompt = `You are a Jira Query Language (JQL) expert.
-Return ONLY the JQL string. No explanation, no markdown, no quotes around it.
+Return ONLY valid JSON with keys:
+  - "jql": the JQL string (no LIMIT)
+  - "limit": optional integer if the user explicitly asked for a result count
+No explanation, no markdown, no extra keys.
 IMPORTANT: JQL does NOT support LIMIT or any result-count clause. Never include LIMIT in the output.`;
 
   const userPrompt = `Convert this natural language query to valid JQL.
@@ -238,18 +249,57 @@ Rules:
 - NEVER add LIMIT — result count is controlled separately, not in JQL`;
 
   try {
-    let jql = await provider.chat(systemPrompt, userPrompt, { temperature: 0.1, maxTokens: 200 });
+    const content = await provider.chat(systemPrompt, userPrompt, {
+      temperature: 0.1,
+      maxTokens: 200,
+      jsonMode: true,
+    });
+
+    let parsed = null;
+    try {
+      parsed = JSON.parse(content);
+    } catch {
+      // Some providers may return plain JQL; treat content as JQL string.
+    }
+
+    let jql = parsed?.jql || content;
     if (!jql || jql.length < 5) throw new Error('Invalid JQL returned');
-    jql = jql.trim();
+    jql = String(jql).trim();
 
     // Safety net: strip any LIMIT clause the AI may have hallucinated despite instructions
     jql = jql.replace(/\s+LIMIT\s+\d+\s*$/i, '').trim();
+
+    // Prefer AI-provided limit if present
+    const aiLimit = Number.isInteger(parsed?.limit) ? parsed.limit : null;
+    if (aiLimit && aiLimit >= 1 && aiLimit <= 500) suggestedLimit = aiLimit;
+
+    // Normalize "last N days/weeks/months" to relative ranges if AI used startOfMonth(-1)/etc.
+    if (shouldUseFallbackDate(naturalQuery, jql)) {
+      jql = buildFallbackJQL(naturalQuery, projectKey);
+    }
 
     return { jql, aiUsed: true, provider: provider.name, suggestedLimit };
   } catch (err) {
     logger.warn(`JQL conversion failed (${provider.name}): ${err.message} — using fallback`);
     return { ...fallback, reason: 'api_error', errorMsg: err.message };
   }
+}
+
+function shouldUseFallbackDate(naturalQuery, jql) {
+  const q = (naturalQuery || '').toLowerCase();
+  const wantsCreated = /\bcreated\b/.test(q);
+  const hasLastRange =
+    /last\s+\d+\s+days?/.test(q) ||
+    /last\s+\d+\s+weeks?/.test(q) ||
+    /last\s+\d+\s+months?/.test(q) ||
+    /\blast\s+month\b/.test(q) ||
+    /\blast\s+week\b/.test(q) ||
+    /\blast\s+year\b/.test(q);
+
+  if (!hasLastRange) return false;
+  // If AI used created when user didn't ask for created, normalize to fallback.
+  if (!wantsCreated && /\bcreated\b/i.test(jql)) return true;
+  return /startOfMonth\s*\(|endOfMonth\s*\(|startOfWeek\s*\(|endOfWeek\s*\(/i.test(jql);
 }
 
 // ── 3. Generate Ticket from Git ───────────────────────────────────────────────

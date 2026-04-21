@@ -25,6 +25,7 @@ const { validate, IssueKeySchema } = require('../validators/schema');
 const cache = require('../utils/cache');
 // requireSyncedField no longer needed — custom fields are now loaded directly from cache
 const logger = require('../utils/logger');
+const { resolveAssignee } = require('../utils/assigneeResolver');
 
 module.exports = {
   command: 'update <key>',
@@ -113,6 +114,11 @@ module.exports = {
             message: `Update story points? (current: ${f.customfield_10026 || 0}, 0 = keep):`,
             default: 0,
           },
+          {
+            type: 'input',
+            name: '_assignee',
+            message: 'Assign to (name or email, blank to keep):',
+          },
         ];
 
         const arrayFields = [];
@@ -170,6 +176,14 @@ module.exports = {
             }
           }
         });
+
+        // Resolve assignee (with local memory)
+        if (fieldAnswers._assignee && fieldAnswers._assignee.trim()) {
+          const assignee = await resolveAssignee(fieldAnswers._assignee, f.project?.key);
+          if (assignee?.accountId) {
+            fieldUpdates.assignee = { accountId: assignee.accountId };
+          }
+        }
 
         // Store comment to add after transition
         if (fieldAnswers._comment) fieldUpdates._comment = fieldAnswers._comment;
