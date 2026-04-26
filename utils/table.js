@@ -24,7 +24,18 @@ const chalk = require('chalk');
 
 /** Strip ANSI escape codes to get visible character count. */
 function visibleLen(str) {
-  return String(str).replace(/\u001b\[[0-9;]*m/g, '').replace(/[^\x00-\x7E]/g, '  ').length;
+  return String(str)
+    // Strip OSC-8 hyperlinks (ESC ] 8 ;; URL BEL ... ESC ] 8 ;; BEL)
+    .replace(/\u001b]8;;.*?\u0007/g, '')
+    .replace(/\u001b]8;;\u0007/g, '')
+    // Strip OSC-8 hyperlinks using ST terminator (ESC \)
+    .replace(/\u001b]8;;.*?\u001b\\/g, '')
+    .replace(/\u001b]8;;\u001b\\/g, '')
+    // Strip ANSI SGR
+    .replace(/\u001b\[[0-9;]*m/g, '')
+    // Account for wide/non-ASCII chars
+    .replace(/[^\x00-\x7E]/g, '  ')
+    .length;
 }
 
 /** Pad a string (may contain ANSI) to a given visible width. */

@@ -394,6 +394,121 @@ Return exactly 3 bullets starting with •. No JSON. No headers.`;
   }
 }
 
+// ── 5. Parse Create Prompt ────────────────────────────────────────────────────
+
+/**
+ * Parse a natural language prompt into structured create fields.
+ * Requires AI provider.
+ */
+async function parseCreatePrompt(prompt, context) {
+  const provider = await getProvider();
+  if (!provider) {
+    return { ok: false, error: 'No AI provider available' };
+  }
+
+  const {
+    issueTypes = [],
+    priorities = [],
+    customFields = {},
+    components = [],
+    fixVersions = [],
+    requiredTextFields = [],
+  } = context || {};
+
+  const systemPrompt = `You are a Jira assistant. Convert the user's prompt into JSON.
+Return ONLY valid JSON with keys:
+  - "issueType" (string or null)
+  - "summary" (string)
+  - "description" (string)
+  - "priority" (string or null)
+  - "customFields" (object: field label -> chosen value)
+  - "components" (array of strings)
+  - "fixVersions" (array of strings)
+  - "textFields" (object: required text field label -> text)
+Rules:
+  - Only choose values from the provided lists.
+  - If unsure, set null or omit field.
+  - Keep summary concise (<100 chars).
+  - Description can be short if not enough info.`;
+
+  const fieldList = Object.entries(customFields)
+    .map(([label, values]) => `${label}: [${values.join(', ')}]`)
+    .join('\n');
+
+  const userPrompt = `User prompt:
+${prompt}
+
+Valid issue types:
+${issueTypes.join(', ')}
+
+Valid priorities:
+${priorities.join(', ')}
+
+Valid custom fields and values:
+${fieldList || '(none)'}
+
+Valid components:
+${components.join(', ') || '(none)'}
+
+Valid fix versions:
+${fixVersions.join(', ') || '(none)'}
+
+Required text fields (provide if present in prompt):
+${requiredTextFields.join(', ') || '(none)'}
+`;
+
+  try {
+    const content = await provider.chat(systemPrompt, userPrompt, {
+      temperature: 0.2,
+      maxTokens: 400,
+      jsonMode: true,
+    });
+
+    const parsed = JSON.parse(content);
+    const result = {
+      issueType: parsed.issueType || null,
+      summary: parsed.summary || '',
+      description: parsed.description || '',
+      priority: parsed.priority || null,
+      customFields: parsed.customFields || {},
+      components: Array.isArray(parsed.components) ? parsed.components : [],
+      fixVersions: Array.isArray(parsed.fixVersions) ? parsed.fixVersions : [],
+      textFields: parsed.textFields || {},
+    };
+
+    return { ok: true, ...result };
+  } catch (err) {
+    logger.warn(`Prompt parse failed (${provider.name}): ${err.message}`);
+    return { ok: false, error: err.message };
+  }
+}
+
+// ── 6. Enhance arbitrary text field ───────────────────────────────────────────
+
+async function enhanceTextField(label, text) {
+  const provider = await getProvider();
+  if (!provider) return { text, aiUsed: false };
+
+  const systemPrompt = `You refine Jira field text. Return only the cleaned text.`;
+  const userPrompt = `Field: ${label}
+Raw text:
+${text}
+
+Rewrite this to be clear and concise. Keep any steps as numbered lines if present.`;
+
+  try {
+    const content = await provider.chat(systemPrompt, userPrompt, {
+      temperature: 0.2,
+      maxTokens: 200,
+    });
+    const cleaned = (content || '').trim();
+    return { text: cleaned || text, aiUsed: true };
+  } catch (err) {
+    logger.warn(`Text enhance failed (${provider.name}): ${err.message}`);
+    return { text, aiUsed: false };
+  }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function extractPlainText(adf) {
@@ -412,4 +527,6 @@ module.exports = {
   summarizeIssue,
   getDescriptionTemplate,
   extractPlainText,
+  parseCreatePrompt,
+  enhanceTextField,
 };

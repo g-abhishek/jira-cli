@@ -114,18 +114,26 @@ module.exports = {
           const customFieldIds = {};   // fieldLabel → customfield_XXXXX
           const customFieldMeta = {};  // fieldLabel → { type, items, custom }
           const requiredFields = {};   // fieldLabel → { id, type, items, custom, required }
+          const requiredFieldsByIssueType = {}; // issueTypeName → { fieldLabel → meta }
 
           meta.issuetypes?.forEach((issueType) => {
+            const itName = issueType.name;
+            if (itName && !requiredFieldsByIssueType[itName]) requiredFieldsByIssueType[itName] = {};
+
             Object.entries(issueType.fields || {}).forEach(([fieldId, fieldMeta]) => {
               // Track required fields (including system fields like components)
-              if (fieldMeta?.required && fieldMeta?.name && !requiredFields[fieldMeta.name]) {
-                requiredFields[fieldMeta.name] = {
+              if (fieldMeta?.required && fieldMeta?.name) {
+                const metaObj = {
                   id: fieldId,
                   type: fieldMeta.schema?.type || null,
                   items: fieldMeta.schema?.items || null,
                   custom: fieldMeta.schema?.custom || null,
                   required: true,
                 };
+                // Global: required if required in ANY issue type
+                requiredFields[fieldMeta.name] = metaObj;
+                // Per issue type: requiredness can vary
+                if (itName) requiredFieldsByIssueType[itName][fieldMeta.name] = metaObj;
               }
 
               if (
@@ -154,6 +162,7 @@ module.exports = {
           results.customFieldIds = customFieldIds;
           results.customFieldMeta = customFieldMeta;
           results.requiredFields = requiredFields;
+          results.requiredFieldsByIssueType = requiredFieldsByIssueType;
 
           // Statuses (used by `jira search --interactive`)
           results.statuses = [...new Set(

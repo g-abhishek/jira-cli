@@ -21,6 +21,7 @@ const { summarizeIssue, extractPlainText } = require('../utils/aiHelper');
 const { printError } = require('../utils/errorParser');
 const { validate, IssueKeySchema } = require('../validators/schema');
 const logger = require('../utils/logger');
+const { terminalLink } = require('../utils/terminalLink');
 
 // Open URL in default browser cross-platform
 function openInBrowser(url) {
@@ -157,7 +158,7 @@ module.exports = {
       // ── Link ─────────────────────────────────────────────────────────────────
       const { baseUrl } = getBaseUrl();
       const ticketUrl = `${baseUrl}/browse/${issue.key}`;
-      console.log('\n  ' + chalk.dim('🔗 ') + chalk.underline.blue(ticketUrl));
+      console.log('\n  ' + chalk.dim('🔗 ') + terminalLink(chalk.underline.blue(ticketUrl), ticketUrl));
       console.log();
 
       // ── Open in browser ───────────────────────────────────────────────────────

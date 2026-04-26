@@ -81,12 +81,15 @@ Create a ticket interactively with prompts.
 jira create                        # Step-by-step prompts
 jira create --type Bug             # Skip the issue type prompt
 jira create --from-git             # AI generates ticket from recent git commits
+jira create --prompt "Create a bug ticket ... UAT ... Swadesh"  # AI auto-fill + auto-submit (requires AI)
+jira create --prompt "..." --prompt-review                     # AI auto-fill + review before submit
 jira create --all-fields           # Prompt for all optional custom fields
 jira create --dry-run              # Preview the payload without creating
 ```
 
 The prompts cover: issue type, summary, description, priority, story points, due date, fix versions, components, and any custom dropdown fields synced from your project.
 Description is free text and optional. If left blank, no AI description is generated.
+`--prompt` uses AI to auto-fill fields (including Components/Fix Versions when possible). It will prompt for missing required fields and show a preview before submit.
 
 ---
 

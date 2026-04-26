@@ -133,6 +133,7 @@ Cache keys follow the pattern: `{PROJECT_KEY}:{data_type}`
 | `{KEY}:fields` → `customFieldIds` | createMeta API — maps label → fieldId | `create`, `update --fields` |
 | `{KEY}:fields` → `customFieldMeta` | createMeta API — field schema metadata | `create` |
 | `{KEY}:fields` → `requiredFields` | createMeta API — required field metadata | `create` |
+| `{KEY}:fields` → `requiredFieldsByIssueType` | createMeta API — required fields per issue type | `create` |
 | `{KEY}:fields` → `statuses` | createMeta API | `search --interactive` |
 | `{KEY}:fields` → `activeSprints` | Agile boards API | `dashboard` |
 | `{KEY}:sync_meta` | set by sync itself | staleness check |
@@ -200,7 +201,7 @@ Provider selection order: `AI_PROVIDER` config (explicit) → Claude Code CLI (a
 
 Claude Code CLI is detected by running `claude --version` — no API key needed, uses existing Claude Code authentication.
 
-**AI failures must never break the workflow.** All AI functions in `utils/aiHelper.js` return a graceful fallback result when `getProvider()` returns null. Smart fallback JQL (`buildFallbackJQL()` in `utils/aiHelper.js`) handles common date/status/type patterns without AI.
+**AI failures must never break the workflow.** All AI functions in `utils/aiHelper.js` return a graceful fallback result when `getProvider()` returns null. Smart fallback JQL (`buildFallbackJQL()` in `utils/aiHelper.js`) handles common date/status/type patterns without AI. `jira create --prompt` is an exception: it requires AI and should error clearly if no provider is available.
 
 ---
 

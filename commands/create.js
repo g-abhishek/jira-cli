@@ -25,12 +25,13 @@ const inquirer = require('inquirer');
 const { autoList } = require('../utils/prompts');
 const { createIssue } = require('../services/jiraService');
 const { resolveProjectKeyInteractive } = require('../utils/projectResolver');
-const { enhanceTicket, generateFromGit, extractPlainText } = require('../utils/aiHelper');
+const { enhanceTicket, generateFromGit, extractPlainText, parseCreatePrompt, enhanceTextField } = require('../utils/aiHelper');
 const { printError } = require('../utils/errorParser');
 const cache = require('../utils/cache');
 const { requireSyncedData, requireSyncedField } = require('../utils/requireSync');
 const gitHelper = require('../utils/gitHelper');
 const logger = require('../utils/logger');
+const { terminalLink } = require('../utils/terminalLink');
 
 module.exports = {
   command: 'create',
@@ -40,7 +41,9 @@ module.exports = {
       .option('from-git', { type: 'boolean', default: false, desc: 'Generate from recent git commits' })
       .option('type', { alias: 't', type: 'string', desc: 'Pre-select issue type' })
       .option('dry-run', { type: 'boolean', default: false, desc: 'Show payload without creating' })
-      .option('all-fields', { type: 'boolean', default: false, desc: 'Prompt for all optional custom fields' }),
+      .option('all-fields', { type: 'boolean', default: false, desc: 'Prompt for all optional custom fields' })
+      .option('prompt', { type: 'string', desc: 'AI prompt to auto-fill fields and create ticket' })
+      .option('prompt-review', { type: 'boolean', default: false, desc: 'Show preview and confirm before creating (with --prompt)' }),
 
   handler: async (argv) => {
     try {
@@ -64,24 +67,57 @@ module.exports = {
       const customFieldIds  = synced.customFieldIds  || {};  // { fieldLabel: "customfield_XXXXX" }
       const customFieldMeta = synced.customFieldMeta || {};  // { fieldLabel: { type, items, custom } }
       const requiredFields  = synced.requiredFields || {};  // { fieldLabel: { id, type, items, required } }
+      const requiredFieldsByIssueType = synced.requiredFieldsByIssueType || {}; // { IssueType: { label: meta } }
 
       console.log(chalk.bold(`\n✨ Create a new ticket in ${chalk.cyan(projectKey)}\n`));
 
       // ── Step 1: Issue Type ───────────────────────────────────────────────────
       let issueType = argv.type;
-      if (!issueType) {
-        const ans = await inquirer.prompt([
-          autoList('issueType', 'Issue type:', issueTypes),
-        ]);
-        issueType = ans.issueType;
-      }
 
       // ── Step 2: From Git (AI mode) ───────────────────────────────────────────
       let summary = '';
       let description = '';
       let descriptionProvided = false;
+      let priorityOverride = null;
+      let promptCustomSelections = {};
+      let promptComponents = [];
+      let promptFixVersions = [];
+      let promptTextFields = {};
 
-      if (argv['from-git']) {
+      const hasPromptFlag = Object.prototype.hasOwnProperty.call(argv, 'prompt');
+      const promptReview = hasPromptFlag || argv['prompt-review'];
+
+      if (hasPromptFlag) {
+        const promptText = argv.prompt;
+        if (!promptText || typeof promptText !== 'string' || promptText.trim().length === 0) {
+          throw new Error('--prompt requires text. Use: jira create --prompt "your text"');
+        }
+
+        console.log(chalk.cyan('\n✨ Parsing prompt with AI...\n'));
+        const parsed = await parseCreatePrompt(promptText, {
+          issueTypes,
+          priorities,
+          customFields,
+          components,
+          fixVersions,
+          requiredTextFields: Object.entries(requiredFields)
+            .filter(([label, meta]) => meta?.id?.startsWith('customfield_') && !customFields[label])
+            .map(([label]) => label),
+        });
+        if (!parsed.ok) {
+          throw new Error('--prompt requires AI provider. Set ANTHROPIC_API_KEY or OPENAI_API_KEY, or configure claude-code.');
+        }
+
+        if (parsed.issueType) issueType = parsed.issueType;
+        summary = parsed.summary || summary;
+        description = parsed.description || description;
+        descriptionProvided = !!description && description.trim().length > 0;
+        if (parsed.priority) priorityOverride = parsed.priority;
+        promptCustomSelections = parsed.customFields || {};
+        promptComponents = parsed.components || [];
+        promptFixVersions = parsed.fixVersions || [];
+        promptTextFields = parsed.textFields || {};
+      } else if (argv['from-git']) {
         if (!gitHelper.isGitRepo()) {
           console.log(chalk.yellow('Not in a git repository. Switching to manual input.\n'));
         } else {
@@ -120,8 +156,19 @@ module.exports = {
         }
       }
 
+      // If issue type wasn't inferred, ask (prompt mode should not guess silently)
+      if (!issueType) {
+        const ans = await inquirer.prompt([
+          autoList('issueType', 'Issue type:', issueTypes),
+        ]);
+        issueType = ans.issueType;
+      }
+
+      // Required fields can vary by issue type; prefer per-type metadata
+      const requiredForType = requiredFieldsByIssueType[issueType] || requiredFields;
+
       // ── Step 3: Manual summary/description input ──────────────────────────────
-      if (!summary) {
+      if (!summary && !hasPromptFlag) {
         const ans = await inquirer.prompt([
           {
             type: 'input',
@@ -133,7 +180,7 @@ module.exports = {
         summary = ans.summary;
       }
 
-      if (!description) {
+      if (!description && !hasPromptFlag) {
         const ans = await inquirer.prompt([
           {
             type: 'editor',
@@ -147,22 +194,32 @@ module.exports = {
       }
 
       // ── Step 4: Core Fields ──────────────────────────────────────────────────
-      const coreAnswers = await inquirer.prompt([
-        autoList('priority', 'Priority:', priorities),
-        {
-          type: 'number',
-          name: 'storyPoints',
-          message: 'Story Points (0 to skip):',
-          default: 0,
-          validate: (v) => (Number.isInteger(v) && v >= 0) || 'Must be a non-negative integer',
-        },
-        {
-          type: 'input',
-          name: 'dueDate',
-          message: 'Due date (YYYY-MM-DD, or blank to skip):',
-          validate: (v) => !v || /^\d{4}-\d{2}-\d{2}$/.test(v) || 'Invalid date format',
-        },
-      ]);
+      let coreAnswers = {
+        priority: priorityOverride || null,
+        storyPoints: 0,
+        dueDate: '',
+      };
+
+      if (!hasPromptFlag) {
+        coreAnswers = await inquirer.prompt([
+          autoList('priority', 'Priority:', priorities),
+          {
+            type: 'number',
+            name: 'storyPoints',
+            message: 'Story Points (0 to skip):',
+            default: 0,
+            validate: (v) => (Number.isInteger(v) && v >= 0) || 'Must be a non-negative integer',
+          },
+          {
+            type: 'input',
+            name: 'dueDate',
+            message: 'Due date (YYYY-MM-DD, or blank to skip):',
+            validate: (v) => !v || /^\d{4}-\d{2}-\d{2}$/.test(v) || 'Invalid date format',
+          },
+        ]);
+      } else if (!coreAnswers.priority) {
+        coreAnswers.priority = priorities[0] || 'Medium';
+      }
 
       // ── Step 5: Custom Fields (dynamic — built from jira sync) ───────────────
       // Shows whatever dropdown fields exist in this specific project. Works for
@@ -172,7 +229,7 @@ module.exports = {
       const customFieldEntries = Object.entries(customFields);
       const fieldsToPrompt = argv['all-fields']
         ? customFieldEntries
-        : customFieldEntries.filter(([label]) => requiredFields[label]);
+        : customFieldEntries.filter(([label]) => requiredForType[label]);
 
       if (fieldsToPrompt.length > 0) {
         const rawCustomAnswers = {};
@@ -180,12 +237,12 @@ module.exports = {
 
         for (const [label, values] of fieldsToPrompt) {
           const meta = customFieldMeta[label] || {};
-          const isRequired = !!requiredFields[label];
+          const isRequired = !!requiredForType[label];
           const isArray = meta.type === 'array';
 
           if (isArray) {
-            const selected = await promptMultiSelectWithFilter(label, values, { required: isRequired });
-            if (selected.length > 0) rawCustomAnswers[label] = selected;
+            const selected = await promptSingleSelect(label, values, { required: isRequired });
+            if (selected) rawCustomAnswers[label] = [selected];
           } else {
             nonArrayPrompts.push(
               autoList(
@@ -197,9 +254,39 @@ module.exports = {
           }
         }
 
-        if (nonArrayPrompts.length > 0) {
+        if (nonArrayPrompts.length > 0 && !hasPromptFlag) {
           const answers = await inquirer.prompt(nonArrayPrompts);
           Object.assign(rawCustomAnswers, answers);
+        }
+
+        // Apply AI-provided custom selections if present
+        if (hasPromptFlag && promptCustomSelections && Object.keys(promptCustomSelections).length > 0) {
+          Object.entries(promptCustomSelections).forEach(([label, value]) => {
+            if (!customFields[label]) return;
+            const meta = customFieldMeta[label] || {};
+            const isArray = meta.type === 'array';
+            if (isArray && Array.isArray(value)) {
+              rawCustomAnswers[label] = value.filter((v) => customFields[label].includes(v));
+            } else if (!isArray && customFields[label].includes(value)) {
+              rawCustomAnswers[label] = value;
+            }
+          });
+        }
+
+        // In --prompt mode, ask only for missing REQUIRED custom dropdowns
+        if (hasPromptFlag) {
+          const missingRequiredNonArray = fieldsToPrompt
+            .filter(([label]) => requiredForType[label]) // required
+            .filter(([label]) => (customFieldMeta[label] || {}).type !== 'array')
+            .filter(([label]) => !rawCustomAnswers[label]);
+
+          if (missingRequiredNonArray.length > 0) {
+            const requiredPrompts = missingRequiredNonArray.map(([label, values]) =>
+              autoList(label, `${label} (required):`, values)
+            );
+            const requiredAnswers = await inquirer.prompt(requiredPrompts);
+            Object.assign(rawCustomAnswers, requiredAnswers);
+          }
         }
 
         // Map label answers back to their Jira field IDs for payload
@@ -224,27 +311,48 @@ module.exports = {
       }
 
       // ── Step 5b: Required custom text fields (e.g., Steps to Reproduce) ─────
-      const requiredTextFields = Object.entries(requiredFields)
+      const requiredTextFields = Object.entries(requiredForType)
         .filter(([label, meta]) => meta?.id?.startsWith('customfield_'))
         .filter(([label, meta]) => !customFields[label]); // not an option field
 
-      if (requiredTextFields.length > 0) {
-        const textPrompts = requiredTextFields.map(([label, meta]) => ({
-          type: meta.type === 'string' ? 'input' : 'editor',
-          name: label,
-          message: `${label} (required):`,
-          validate: (v) => (v && v.trim().length > 0) || 'This field is required',
-        }));
+      if (requiredTextFields.length > 0 && (!hasPromptFlag || promptReview)) {
+        // Apply AI-provided text fields first
+        if (hasPromptFlag && promptTextFields && Object.keys(promptTextFields).length > 0) {
+          for (const [label, value] of Object.entries(promptTextFields)) {
+            const id = requiredForType[label]?.id;
+            if (!id || !value || !String(value).trim()) continue;
+            const meta = requiredForType[label] || {};
+            let textValue = String(value).trim();
+            const enhancedText = await enhanceTextField(label, textValue);
+            if (enhancedText?.text) textValue = enhancedText.text;
+            const needsADF = typeof meta.custom === 'string' && meta.custom.includes('textarea');
+            customFieldAnswers[id] = needsADF ? buildADF(textValue) : textValue;
+          }
+        }
 
-        const textAnswers = await inquirer.prompt(textPrompts);
-        Object.entries(textAnswers).forEach(([label, value]) => {
-          const id = requiredFields[label]?.id;
-          if (!id || !value || !value.trim()) return;
-
-          const meta = requiredFields[label] || {};
-          const needsADF = typeof meta.custom === 'string' && meta.custom.includes('textarea');
-          customFieldAnswers[id] = needsADF ? buildADF(value.trim()) : value.trim();
+        const missing = requiredTextFields.filter(([label, meta]) => {
+          const id = requiredForType[label]?.id;
+          return id && !customFieldAnswers[id];
         });
+
+        if (missing.length > 0) {
+          const textPrompts = missing.map(([label, meta]) => ({
+            type: meta.type === 'string' ? 'input' : 'editor',
+            name: label,
+            message: `${label} (required):`,
+            validate: (v) => (v && v.trim().length > 0) || 'This field is required',
+          }));
+
+          const textAnswers = await inquirer.prompt(textPrompts);
+          Object.entries(textAnswers).forEach(([label, value]) => {
+            const id = requiredForType[label]?.id;
+            if (!id || !value || !value.trim()) return;
+
+            const meta = requiredForType[label] || {};
+            const needsADF = typeof meta.custom === 'string' && meta.custom.includes('textarea');
+            customFieldAnswers[id] = needsADF ? buildADF(value.trim()) : value.trim();
+          });
+        }
       }
 
       // ── Step 6: Versions + Components ────────────────────────────────────────
@@ -252,36 +360,45 @@ module.exports = {
       let selectedComponents = [];
 
       const fixVersionsRequired =
-        !!requiredFields['Fix Versions'] || !!requiredFields['Fix versions'] || !!requiredFields['fixVersions'];
+        !!requiredForType['Fix Versions'] || !!requiredForType['Fix versions'] || !!requiredForType['fixVersions'];
 
-      if (fixVersions.length > 0) {
-        selectedVersions = await promptMultiSelectWithFilter('Fix Versions', fixVersions, { required: fixVersionsRequired });
+      if (fixVersions.length > 0 && (!hasPromptFlag || promptReview)) {
+        const picked = await promptSingleSelect('Fix Versions', fixVersions, { required: fixVersionsRequired });
+        selectedVersions = picked ? [picked] : [];
         if (fixVersionsRequired && selectedVersions.length === 0) {
-          throw new Error('Fix Versions is required but none were selected. Please choose at least one.');
+          throw new Error('Fix Versions is required but none were selected. Please choose one.');
         }
+      } else if (hasPromptFlag && promptFixVersions.length > 0) {
+        selectedVersions = promptFixVersions.filter((v) => fixVersions.includes(v));
       }
 
-      const componentsRequired = !!requiredFields.Components;
-      if (components.length > 0) {
-        selectedComponents = await promptMultiSelectWithFilter('Components', components, { required: componentsRequired });
-      } else if (componentsRequired) {
+      const componentsRequired = !!requiredForType.Components;
+      if (components.length > 0 && (!hasPromptFlag || promptReview)) {
+        const picked = await promptSingleSelect('Components', components, { required: componentsRequired });
+        selectedComponents = picked ? [picked] : [];
+      } else if (hasPromptFlag && promptComponents.length > 0) {
+        selectedComponents = promptComponents.filter((v) => components.includes(v));
+      } else if (componentsRequired && components.length === 0) {
         throw new Error('Components is required but no components are available in sync data. Run `jira sync --force`.');
       }
 
       // ── Step 7: AI Enhancement ────────────────────────────────────────────────
-      const aiSpinner = ora('Enhancing with AI...').start();
-      const enhanced = await enhanceTicket({ summary, description, issueType });
-      aiSpinner.stop();
+      let enhanced = { summary, description, aiUsed: false };
+      if (!hasPromptFlag || promptReview) {
+        const aiSpinner = ora('Enhancing with AI...').start();
+        enhanced = await enhanceTicket({ summary, description, issueType });
+        aiSpinner.stop();
+      }
 
       // If user left description blank, keep it blank (don't inject templates)
       if (!descriptionProvided) {
         enhanced.description = '';
       }
 
-      if (enhanced.aiUsed) {
+      if ((!hasPromptFlag || promptReview) && enhanced.aiUsed) {
         console.log(chalk.cyan('\n✨ AI enhanced your ticket:'));
         console.log(`  Summary: ${chalk.white(enhanced.summary)}`);
-      } else {
+      } else if (!hasPromptFlag || promptReview) {
         console.log(chalk.dim('\n  (AI not available — using your input as-is)'));
       }
 
@@ -304,18 +421,20 @@ module.exports = {
       });
       console.log(chalk.bold('─────────────────────────────────────────────────\n'));
 
-      const { confirmed } = await inquirer.prompt([
-        {
-          type: 'confirm',
-          name: 'confirmed',
-          message: 'Create this ticket?',
-          default: true,
-        },
-      ]);
+      if (!hasPromptFlag || promptReview) {
+        const { confirmed } = await inquirer.prompt([
+          {
+            type: 'confirm',
+            name: 'confirmed',
+            message: 'Create this ticket?',
+            default: true,
+          },
+        ]);
 
-      if (!confirmed) {
-        console.log(chalk.yellow('\nCancelled.\n'));
-        return;
+        if (!confirmed) {
+          console.log(chalk.yellow('\nCancelled.\n'));
+          return;
+        }
       }
 
       // ── Step 9: Build payload ─────────────────────────────────────────────────
@@ -324,7 +443,7 @@ module.exports = {
         summary: enhanced.summary,
         description: buildADF(enhanced.description),
         issuetype: { name: issueType },
-        priority: { name: coreAnswers.priority },
+        priority: { name: coreAnswers.priority || priorities[0] || 'Medium' },
       };
 
       if (coreAnswers.storyPoints > 0) fields.customfield_10026 = coreAnswers.storyPoints;
@@ -351,7 +470,7 @@ module.exports = {
       const url = `${baseUrl}/browse/${created.key}`;
 
       console.log(chalk.green(`\n✔ Created ${chalk.bold(created.key)}`));
-      console.log(chalk.dim(`  ${url}\n`));
+      console.log(chalk.dim('  ') + terminalLink(chalk.underline.blue(url), url) + '\n');
       logger.info(`create: ${created.key} (${issueType}) in ${projectKey}`);
     } catch (err) {
       printError(err);
@@ -399,55 +518,18 @@ function getBaseUrl() {
  * Multi-select with filter + repeat.
  * Returns array of selected values.
  */
-async function promptMultiSelectWithFilter(label, choices, { required = false } = {}) {
-  const selected = new Set();
-  let addMore = true;
+async function promptSingleSelect(label, choices, { required = false } = {}) {
+  const opts = required ? choices : ['(skip)', ...choices];
+  const { value } = await inquirer.prompt([
+    autoList('value', `${label}${required ? ' (required)' : ''}:`, opts),
+  ]);
 
-  while (addMore) {
-    const { filter } = await inquirer.prompt([
-      {
-        type: 'input',
-        name: 'filter',
-        message: `Filter ${label} (type to narrow, blank for all):`,
-        default: '',
-      },
-    ]);
-
-    const query = (filter || '').toLowerCase().trim();
-    const filtered = query
-      ? choices.filter((v) => v.toLowerCase().includes(query))
-      : choices;
-
-    if (filtered.length === 0) {
-      console.log(chalk.yellow(`\n  No ${label.toLowerCase()} matched that filter.\n`));
-    } else {
-      const { picks } = await inquirer.prompt([
-        {
-          type: 'checkbox',
-          name: 'picks',
-          message: `${label} (space to select):`,
-          choices: filtered.slice(0, 30), // cap for UX
-          pageSize: 10,
-        },
-      ]);
-      picks.forEach((v) => selected.add(v));
+  if (value === '(skip)') {
+    if (required) {
+      console.log(chalk.yellow(`\n  ${label} is required. Please select one.\n`));
+      return promptSingleSelect(label, choices, { required });
     }
-
-    const { more } = await inquirer.prompt([
-      {
-        type: 'confirm',
-        name: 'more',
-        message: `Add more ${label.toLowerCase()}?`,
-        default: false,
-      },
-    ]);
-    addMore = more;
+    return null;
   }
-
-  const result = Array.from(selected);
-  if (required && result.length === 0) {
-    console.log(chalk.yellow(`\n  ${label} is required. Please select at least one.\n`));
-    return promptMultiSelectWithFilter(label, choices, { required });
-  }
-  return result;
+  return value;
 }

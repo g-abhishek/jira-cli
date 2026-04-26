@@ -23,6 +23,19 @@ const { printError } = require('../utils/errorParser');
 const { isSyncStale } = require('../utils/cache');
 const { printTable } = require('../utils/table');
 const logger = require('../utils/logger');
+const { terminalLink } = require('../utils/terminalLink');
+
+function getBaseUrl() {
+  const os = require('os');
+  const path = require('path');
+  const fs = require('fs');
+  const configPath = path.join(os.homedir(), '.jira-cli', 'config.json');
+  let fileConfig = {};
+  try {
+    if (fs.existsSync(configPath)) fileConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  } catch {}
+  return { baseUrl: (fileConfig.JIRA_BASE_URL || process.env.JIRA_BASE_URL || '').replace(/\/$/, '') };
+}
 
 // ── Status coloring ────────────────────────────────────────────────────────────
 
@@ -160,6 +173,7 @@ module.exports = {
       );
 
       // ── Table ───────────────────────────────────────────────────────────────
+      const { baseUrl } = getBaseUrl();
       printTable({
         columns: [
           {
@@ -168,7 +182,10 @@ module.exports = {
           },
           {
             key: 'key', header: 'Key', width: 11,
-            render: (v) => chalk.bold.cyan(v),
+            render: (v) => {
+              const url = baseUrl ? `${baseUrl}/browse/${v}` : null;
+              return terminalLink(chalk.bold.cyan(v), url);
+            },
           },
           {
             key: 'type', header: 'Type', width: 9,
