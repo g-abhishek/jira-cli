@@ -107,6 +107,7 @@ module.exports = {
       .option('type',        { alias: 't',  type: 'string',  desc: 'Issue type filter' })
       .option('priority',    { alias: 'pr', type: 'string',  desc: 'Priority filter' })
       .option('filter',      { alias: 'f',  type: 'string',  desc: 'Plain-English filter (AI-powered)' })
+      .option('jql',         {              type: 'string',  desc: 'Raw JQL query (no AI)' })
       .option('limit',       { alias: 'l',  type: 'number',  default: 25,   desc: 'Results per page' })
       .option('page',        { alias: 'p',  type: 'number',  default: 0,    desc: 'Page number (0-indexed)' })
       .option('json',        {              type: 'boolean', default: false, desc: 'Output raw JSON' })
@@ -117,8 +118,13 @@ module.exports = {
       const projectKey = argv.project || (await resolveProjectKeyInteractive());
       let jql;
 
+      // ── Raw JQL ───────────────────────────────────────────────────────────
+      if (argv.jql) {
+        jql = argv.jql.trim();
+        jql = await replaceAssigneeInJql(jql, projectKey);
+
       // ── Interactive mode ───────────────────────────────────────────────────
-      if (argv.interactive) {
+      } else if (argv.interactive) {
         const syncedData = cache.get(`${projectKey}:fields`);
         requireSyncedData(syncedData, projectKey);
         const statuses   = requireSyncedField(syncedData, 'statuses',   projectKey, 'Statuses');

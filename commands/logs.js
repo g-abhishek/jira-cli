@@ -34,7 +34,7 @@ module.exports = {
   desc: 'View Jira CLI activity logs',
   builder: (yargs) =>
     yargs
-      .option('lines', { alias: 'n', type: 'number', default: 50, desc: 'Number of lines to show' })
+      .option('lines', { alias: ['n', 'tail'], type: 'number', default: 50, desc: 'Number of lines to show' })
       .option('level', { alias: 'l', type: 'string', desc: 'Filter by level (error|warn|info|debug)' })
       .option('clear', { type: 'boolean', default: false, desc: 'Clear all log files' }),
 

@@ -229,14 +229,13 @@ Create a ticket interactively with AI enhancement.
 jira create
 jira create --type Bug
 jira create --from-git           # Generate from recent git commits
-jira create --prompt "Create a bug ticket ... UAT ... Swadesh"   # AI auto-fill + auto-submit (requires AI)
-jira create --prompt "..." --prompt-review                       # AI auto-fill + review before submit
+jira create --prompt "Create a bug ticket ... UAT ... Swadesh"   # AI auto-fill (requires AI)
 jira create --all-fields         # Prompt for all optional custom fields
 jira create --dry-run            # Preview without creating
 ```
 
 Description is free text and optional. If left blank, no AI description is generated.
-`--prompt` uses AI to auto-fill fields (including Components/Fix Versions when possible). It will prompt for missing required fields and show a preview before submit.
+`--prompt` uses AI to auto-fill fields (including Components/Fix Versions when possible). It then prompts for any missing required fields and shows a preview before submit.
 
 ### `jira update <KEY>`
 Transition a ticket. Shows only valid next states (workflow-aware).

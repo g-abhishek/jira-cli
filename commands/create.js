@@ -42,8 +42,7 @@ module.exports = {
       .option('type', { alias: 't', type: 'string', desc: 'Pre-select issue type' })
       .option('dry-run', { type: 'boolean', default: false, desc: 'Show payload without creating' })
       .option('all-fields', { type: 'boolean', default: false, desc: 'Prompt for all optional custom fields' })
-      .option('prompt', { type: 'string', desc: 'AI prompt to auto-fill fields and create ticket' })
-      .option('prompt-review', { type: 'boolean', default: false, desc: 'Show preview and confirm before creating (with --prompt)' }),
+      .option('prompt', { type: 'string', desc: 'AI prompt to auto-fill fields and create ticket' }),
 
   handler: async (argv) => {
     try {
@@ -85,7 +84,7 @@ module.exports = {
       let promptTextFields = {};
 
       const hasPromptFlag = Object.prototype.hasOwnProperty.call(argv, 'prompt');
-      const promptReview = hasPromptFlag || argv['prompt-review'];
+      const promptReview = hasPromptFlag;
 
       if (hasPromptFlag) {
         const promptText = argv.prompt;
@@ -383,23 +382,25 @@ module.exports = {
       }
 
       // ── Step 7: AI Enhancement ────────────────────────────────────────────────
+      // When --prompt is used, parseCreatePrompt already generated a comprehensive
+      // description — skip enhanceTicket to avoid collapsing it into a generic template.
       let enhanced = { summary, description, aiUsed: false };
-      if (!hasPromptFlag || promptReview) {
+      if (!hasPromptFlag) {
         const aiSpinner = ora('Enhancing with AI...').start();
         enhanced = await enhanceTicket({ summary, description, issueType });
         aiSpinner.stop();
-      }
 
-      // If user left description blank, keep it blank (don't inject templates)
-      if (!descriptionProvided) {
-        enhanced.description = '';
-      }
+        // If user left description blank, keep it blank (don't inject templates)
+        if (!descriptionProvided) {
+          enhanced.description = '';
+        }
 
-      if ((!hasPromptFlag || promptReview) && enhanced.aiUsed) {
-        console.log(chalk.cyan('\n✨ AI enhanced your ticket:'));
-        console.log(`  Summary: ${chalk.white(enhanced.summary)}`);
-      } else if (!hasPromptFlag || promptReview) {
-        console.log(chalk.dim('\n  (AI not available — using your input as-is)'));
+        if (enhanced.aiUsed) {
+          console.log(chalk.cyan('\n✨ AI enhanced your ticket:'));
+          console.log(`  Summary: ${chalk.white(enhanced.summary)}`);
+        } else {
+          console.log(chalk.dim('\n  (AI not available — using your input as-is)'));
+        }
       }
 
       // ── Step 8: Confirm ───────────────────────────────────────────────────────

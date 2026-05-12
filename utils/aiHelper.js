@@ -429,7 +429,14 @@ Rules:
   - Only choose values from the provided lists.
   - If unsure, set null or omit field.
   - Keep summary concise (<100 chars).
-  - Description can be short if not enough info.`;
+  - CRITICAL: The description MUST be comprehensive and AI-implementation-ready.
+    Preserve ALL specific technical details from the user's prompt verbatim:
+    model/schema names, file paths, function/method names, config flags, API routes,
+    error constants, middleware names, database field names, indexes, validation rules,
+    edge cases, and test requirements. A developer or AI agent reading only this
+    description must have everything they need to implement the feature — no guessing.
+    Use sections with headers (e.g. "## Overview", "## Technical Spec", "## Acceptance Criteria")
+    and include concrete examples wherever the user provided them.`;
 
   const fieldList = Object.entries(customFields)
     .map(([label, values]) => `${label}: [${values.join(', ')}]`)
@@ -460,7 +467,7 @@ ${requiredTextFields.join(', ') || '(none)'}
   try {
     const content = await provider.chat(systemPrompt, userPrompt, {
       temperature: 0.2,
-      maxTokens: 400,
+      maxTokens: 1500,
       jsonMode: true,
     });
 
